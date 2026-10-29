@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DFM Touch 波形分析 · BLE 拖拽版</title>
+  <!-- Chart.js 轻量图表库 -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --fg: #1a1a1a;
+      --fg-2: #555;
+      --fg-3: #888;
+      --line: #e3e6ea;
+      --bg-soft: #f7f8fa;
+      --blue-bg: #eef5ff;
+      --blue-bd: #b6d4fe;
+      --blue-fg: #084298;
+      --amber-bg: #fff8e6;
+      --amber-bd: #ffd966;
+      --amber-fg: #7a5b00;
+      --red-bg: #fdecea;
+      --red-bd: #f5b5ac;
+      --red-fg: #a12315;
+      --green-bg: #eaf6ec;
+      --green-bd: #a9dcb4;
+      --green-fg: #1e6b34;
+      --drop-bg: #f0f7ff;
+      --drop-bd: #3b82f6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px 16px 64px;
+      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+      color: var(--fg);
+      background: #fff;
+      line-height: 1.6;
+    }
+    .page { max-width: 1180px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    .subtitle { color: var(--fg-3); font-size: 13px; margin-bottom: 18px; }
+    .subtitle code { background: #f0f2f5; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-bottom: 16px;
+      background: var(--bg-soft);
+      transition: background .15s, border-color .15s;
+    }
+    .panel.drag-over {
+      background: var(--drop-bg);
+      border-color: var(--drop-bd);
+      border-style: dashed;
+      box-shadow: 0 0 0 3px rgba(59,130,246,.15);
+    }
+    .panel-title {
+      font-weight: 700;
+      font-size: 14px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .panel-title .hint { font-weight: 400; color: var(--fg-3); font-size: 12px; }
+
+    .drop-hint {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--blue-fg);
+      font-size: 13px;
+      background: var(--blue-bg);
+      border: 1px dashed var(--blue-bd);
+      border-radius: 8px;
+      padding: 8px 14px;
+      margin-bottom: 10px;
+    }
+    .drop-hint .icon { font-size: 18px; }
+    .drop-hint .file-name { font-weight: 600; }
+
+    textarea {
+      width: 100%;
+      min-height: 200px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+      font-size: 12.5px;
+      line-height: 1.5;
+      background: #fff;
+      color: var(--fg);
+      outline: none;
+    }
+    textarea:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.12); }
+
+    .btn-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+    button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--fg);
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-size: 13.5px;
+      cursor: pointer;
+      transition: all .15s;
+      font-family: inherit;
+    }
+    button:hover { border-color: #3b82f6; color: #084298; background: var(--blue-bg); }
+    button.primary { background: #3b82f6; border-color: #3b82f6; color: #fff; font-weight: 600; }
+    button.primary:hover { background: #2563eb; color: #fff; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .stat-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #fff;
+      font-size: 12.5px;
+    }
+    .stat-card .name { font-weight: 700; font-size: 13.5px; margin-bottom: 4px; }
+    .stat-card .row { display: flex; justify-content: space-between; color: var(--fg-2); }
+    .stat-card .row b { color: var(--fg); font-weight: 600; }
+
+    .chart-wrap {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px 6px;
+      margin-bottom: 14px;
+      background: #fff;
+    }
+    .chart-title { font-weight: 700; font-size: 14px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }
+    .chart-title .hint { font-weight: 400; color: var(--fg-3); font-size: 12px; }
+    canvas { width: 100% !important; }
+
+    .callout {
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin: 12px 0;
+      border: 1px solid;
+      font-size: 13px;
+    }
+    .callout.warn { background: var(--amber-bg); border-color: var(--amber-bd); }
+    .callout.warn .ttl { color: var(--amber-fg); font-weight: 700; margin-bottom: 4px; }
+    .callout.info { background: var(--blue-bg); border-color: var(--blue-bd); }
+    .callout.info .ttl { color: var(--blue-fg); font-weight: 700; margin-bottom: 4px; }
+    .callout.danger { background: var(--red-bg); border-color: var(--red-bd); }
+    .callout.danger .ttl { color: var(--red-fg); font-weight: 700; margin-bottom: 4px; }
+    .callout ul { margin: 4px 0 0; padding-left: 20px; }
+
+    .err { color: var(--red-fg); font-size: 13px; margin-top: 8px; display: none; background: var(--red-bg); border-radius: 6px; padding: 8px 12px; border: 1px solid var(--red-bd); }
+    .footer { margin-top: 32px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--fg-3); font-size: 12px; }
+
+    .legend-row { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 4px 0 2px; font-size: 12.5px; color: var(--fg-2); }
+    .legend-item { display: inline-flex; align-items: center; gap: 6px; }
+    .legend-item .line { display: inline-block; width: 18px; height: 3px; border-radius: 2px; }
+    /* 返回主页小房子 */
+    .home-btn {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: 1000;
+      width: 42px;
+      height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      background: #fff;
+      border: 1px solid var(--line, #e3e6ea);
+      box-shadow: 0 2px 10px rgba(0,0,0,.08);
+      color: var(--fg-2, #555);
+      text-decoration: none;
+      transition: all .15s;
+    }
+    .home-btn:hover {
+      border-color: #3b82f6;
+      color: #084298;
+      background: var(--blue-bg, #eef5ff);
+      box-shadow: 0 4px 16px rgba(59,130,246,.22);
+      transform: translateY(-1px);
+    }
+    .home-btn svg { width: 20px; height: 20px; display: block; }
+  </style>
+</head>
+<body>
+<a class="home-btn" href="index.html" title="返回模式选择" aria-label="返回模式选择">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 10.5 12 3l9 7.5"/>
+    <path d="M5 9.5V21h14V9.5"/>
+    <path d="M10 21v-6h4v6"/>
+  </svg>
+</a>
+<div class="page">
+
+  <h1>DFM Touch 波形分析工具</h1>
+  <div class="subtitle">
+    支持 <b>串口纯文本</b> 与 <b>BLE 日志（带时间戳/Notify）</b> 两种格式；自动识别 4 字段（diff0, diff1, base0, base1）与 8 字段（追加 valid0, valid1, raw0, raw1）行。
+    可直接 <b>拖拽日志文件</b> 到下方区域，或粘贴文本。四条曲线绘制在同一坐标系。
+  </div>
+
+  <!-- 拖拽 + 输入区 -->
+  <div class="panel" id="dropPanel">
+    <div class="panel-title">
+      <span>① 拖拽日志文件 或 粘贴数据</span>
+      <span class="hint">支持 .txt / .log / .csv 等文本文件</span>
+    </div>
+    <div class="drop-hint" id="dropHint">
+      <span class="icon">📂</span>
+      <span>将文件拖拽到此面板任意位置，或点击下方按钮选择文件</span>
+    </div>
+    <textarea id="logInput" placeholder="粘贴串口或 BLE 日志，例如：
+
+$DFM,TP 526260,236,-44,121699*70
+（BLE 格式）14:19:12.690> [6e400003] Notify: &quot;$DFM,TP 77,158,-804,-3473*68&quot;
+也支持裸 TP 行：TP 526260,236,-44,121699"></textarea>
+
+    <div class="btn-row">
+      <button class="primary" id="btnGenerate">生成波形图</button>
+      <button id="btnSample4">填入 4 字段示例</button>
+      <button id="btnSample8">填入 8 字段示例</button>
+      <button id="btnSampleBLE">填入 BLE 示例</button>
+      <button id="btnClear">清空</button>
+      <button id="btnExport">导出 PNG</button>
+      <input type="file" id="fileInput" accept=".txt,.log,.csv,text/*" style="display:none">
+      <button id="btnChooseFile">选择文件</button>
+    </div>
+    <div class="err" id="errBox"></div>
+  </div>
+
+  <!-- 统计 -->
+  <div class="panel" id="statsPanel" style="display:none;">
+    <div class="panel-title">
+      <span>② 数据统计</span>
+      <span class="hint" id="countHint"></span>
+    </div>
+    <div class="stats" id="statsGrid"></div>
+  </div>
+
+  <div id="chartsArea"></div>
+  <div id="insightArea"></div>
+
+  <div class="footer">
+    说明：本工具绘制 4 条核心曲线 ——
+    <b>diff0</b>：检测 pad 的检测数据（差分）；
+    <b>diff1</b>：参考 pad 的检测数据（差分）；
+    <b>base0</b>：检测 pad 的 baseline；
+    <b>base1</b>：参考 pad 的 baseline。
+    8 字段格式会额外解析 valid/raw 但默认不绘图。
+  </div>
+
+</div>
+
+<script>
+(function () {
+  // ===================== 解析器 =====================
+  // 通用 TP 行提取：允许行首/行尾有任意内容（时间戳、[6e400003]、Notify 等）
+  // 支持 $DFM,TP a,b,c,d*XX / $DFM,TP a,b,c,d,e,f,g,h*XX 以及裸 TP 行
+  // 用“扫描数字”方式，比正则更鲁棒，避免 BLE 行截断。
+
+  function tryParseTPLine(line) {
+    // 查找 "TP" 出现的位置（前后可能有空格或$DFM,）
+    const tpIdx = line.indexOf('TP');
+    if (tpIdx === -1) return null;
+
+    // 从 TP 之后开始截取到行尾，提取连续数字（含负号）和逗号
+    let pos = tpIdx + 2;
+    // 跳过空白和逗号
+    while (pos < line.length && /[\s,]/.test(line[pos])) pos++;
+
+    const nums = [];
+    let i = pos;
+    while (i < line.length) {
+      // 跳过空白和逗号
+      while (i < line.length && /[\s,]/.test(line[i])) i++;
+      if (i >= line.length) break;
+
+      // 匹配负号（可选）后跟数字
+      let sign = 1;
+      if (line[i] === '-') { sign = -1; i++; }
+      else if (line[i] === '+') { i++; }
+
+      let start = i;
+      while (i < line.length && /\d/.test(line[i])) i++;
+      if (i === start) break; // 没有数字，停止
+
+      const numStr = line.slice(start, i);
+      const num = sign * parseInt(numStr, 10);
+      if (!Number.isFinite(num)) break;
+      nums.push(num);
+
+      // 如果下一个非空格字符不是逗号，停止（可能是 *CRC 或行尾）
+      let j = i;
+      while (j < line.length && /\s/.test(line[j])) j++;
+      if (j < line.length && line[j] === ',') {
+        i = j + 1; // 跳过逗号继续
+      } else {
+        break; // 结束
+      }
+    }
+
+    if (nums.length < 4) return null;
+
+    // 判断字段数：至少4个，最多8个（忽略更多）
+    // 优先按8字段解析（若>=8），否则4字段
+    if (nums.length >= 8) {
+      const v = nums.slice(0, 8);
+      return {
+        format: 8,
+        diff0: v[0], diff1: v[1],
+        base0: v[2], base1: v[3],
+        valid0: v[4], valid1: v[5],
+        raw0: v[6], raw1: v[7]
+      };
+    } else {
+      const v = nums.slice(0, 4);
+      return {
+        format: 4,
+        diff0: v[0], diff1: v[1],
+        base0: v[2], base1: v[3]
+      };
+    }
+  }
+
+  function parseLog(text) {
+    const rows = [];
+    let format4Count = 0, format8Count = 0;
+    const lines = text.split(/\r?\n/);
+    for (const line of lines) {
+      const s = line.trim();
+      if (!s) continue;
+
+      // 跳过明显非 TP 行（快速过滤）
+      if (!/TP/.test(s)) continue;
+
+      const parsed = tryParseTPLine(s);
+      if (parsed) {
+        rows.push(parsed);
+        if (parsed.format === 8) format8Count++;
+        else format4Count++;
+      }
+    }
+    return { rows, format4Count, format8Count };
+  }
+
+  // ===================== 统计 =====================
+  function calcStats(rows, key) {
+    let min = Infinity, max = -Infinity, sum = 0, cnt = 0;
+    for (const r of rows) {
+      const v = r[key];
+      if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+      if (v < min) min = v;
+      if (v > max) max = v;
+      sum += v;
+      cnt++;
+    }
+    if (!cnt) return null;
+    return { min, max, range: max - min, avg: sum / cnt, n: cnt };
+  }
+
+  // ===================== 降采样 =====================
+  function downsample(indices, values, maxPoints) {
+    if (values.length <= maxPoints) return { labels: indices.slice(), data: values.slice() };
+    const step = Math.ceil(values.length / maxPoints);
+    const outLabels = [], outData = [];
+    for (let i = 0; i < values.length; i += step) {
+      outLabels.push(indices[i]);
+      outData.push(values[i]);
+    }
+    return { labels: outLabels, data: outData };
+  }
+
+  // ===================== 图表 =====================
+  let chartInstance = null;
+  const COLORS = {
+    diff0: { line: '#2563eb', fill: 'rgba(37,99,235,.05)' },
+    diff1: { line: '#f59e0b', fill: 'rgba(245,158,11,.05)' },
+    base0: { line: '#10b981', fill: 'rgba(16,185,129,.06)' },
+    base1: { line: '#ef4444', fill: 'rgba(239,68,68,.06)' }
+  };
+
+  function renderCombinedChart(rows) {
+    const area = document.getElementById('chartsArea');
+    area.innerHTML = '';
+
+    const n = rows.length;
+    const maxPoints = 3000;
+    const indices = rows.map((_, i) => i);
+
+    const d0 = downsample(indices, rows.map(r => r.diff0), maxPoints);
+    const d1 = downsample(indices, rows.map(r => r.diff1), maxPoints);
+    const b0 = downsample(indices, rows.map(r => r.base0), maxPoints);
+    const b1 = downsample(indices, rows.map(r => r.base1), maxPoints);
+
+    const labels = d0.labels;
+
+    const datasets = [
+      {
+        label: 'diff0 (检测pad)',
+        data: d0.data,
+        borderColor: COLORS.diff0.line,
+        backgroundColor: COLORS.diff0.fill,
+        borderWidth: 1.5, pointRadius: 0, pointHitRadius: 6, tension: 0, fill: false
+      },
+      {
+        label: 'diff1 (参考pad)',
+        data: d1.data,
+        borderColor: COLORS.diff1.line,
+        backgroundColor: COLORS.diff1.fill,
+        borderWidth: 1.5, pointRadius: 0, pointHitRadius: 6, tension: 0, fill: false
+      },
+      {
+        label: 'base0 (检测pad基线)',
+        data: b0.data,
+        borderColor: COLORS.base0.line,
+        backgroundColor: COLORS.base0.fill,
+        borderWidth: 1.6, pointRadius: 0, pointHitRadius: 6, tension: 0, fill: false
+      },
+      {
+        label: 'base1 (参考pad基线)',
+        data: b1.data,
+        borderColor: COLORS.base1.line,
+        backgroundColor: COLORS.base1.fill,
+        borderWidth: 1.6, pointRadius: 0, pointHitRadius: 6, tension: 0, fill: false
+      }
+    ];
+
+    const wrap = document.createElement('div');
+    wrap.className = 'chart-wrap';
+    const title = document.createElement('div');
+    title.className = 'chart-title';
+    title.innerHTML = `<span>diff0 / diff1 / base0 / base1 四合一波形</span>
+      <span class="hint">横轴：sample index（共 ${n} 条，绘制 ${labels.length} 点）</span>`;
+    wrap.appendChild(title);
+
+    const legend = document.createElement('div');
+    legend.className = 'legend-row';
+    legend.innerHTML = `
+      <span class="legend-item"><span class="line" style="background:${COLORS.diff0.line}"></span>diff0 (检测pad)</span>
+      <span class="legend-item"><span class="line" style="background:${COLORS.diff1.line}"></span>diff1 (参考pad)</span>
+      <span class="legend-item"><span class="line" style="background:${COLORS.base0.line}"></span>base0 (检测pad基线)</span>
+      <span class="legend-item"><span class="line" style="background:${COLORS.base1.line}"></span>base1 (参考pad基线)</span>
+    `;
+    wrap.appendChild(legend);
+
+    const canvas = document.createElement('canvas');
+    canvas.style.maxHeight = '560px';
+    wrap.appendChild(canvas);
+
+    area.appendChild(wrap);
+
+    const cfg = {
+      type: 'line',
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) => `sample #${items[0].label}`,
+              label: (item) => `${item.dataset.label}: ${item.parsed.y}`
+            }
+          }
+        },
+        scales: {
+          x: {
+            title: { display: true, text: 'sample index', color: '#888', font: { size: 11 } },
+            ticks: { color: '#888', maxTicksLimit: 14, font: { size: 11 } },
+            grid: { color: 'rgba(0,0,0,.05)' }
+          },
+          y: {
+            position: 'left',
+            title: { display: true, text: 'diff0 / diff1 / base0 / base1', color: '#888', font: { size: 11 } },
+            ticks: { color: '#888', font: { size: 11 } },
+            grid: { color: 'rgba(0,0,0,.05)' }
+          }
+        }
+      }
+    };
+
+    chartInstance = new Chart(canvas, cfg);
+  }
+
+  // ===================== 洞察 =====================
+  function renderInsights(rows) {
+    const area = document.getElementById('insightArea');
+    area.innerHTML = '';
+    const n = rows.length;
+    if (!n) return;
+    const cards = [];
+
+    const hasBase1 = rows.some(r => typeof r.base1 === 'number');
+
+    cards.push({
+      cls: 'info',
+      ttl: '通道含义',
+      html: `
+        <ul>
+          <li><b>diff0</b>：检测 pad 的检测数据（差分输出，反映检测电极上的实时变化）。</li>
+          <li><b>diff1</b>：参考 pad 的检测数据（差分输出，反映参考电极上的实时变化）。</li>
+          <li><b>base0</b>：检测 pad 的 baseline 基线数据。</li>
+          <li><b>base1</b>：参考 pad 的 baseline 基线数据。</li>
+        </ul>
+      `
+    });
+
+    if (hasBase1) {
+      const seg = longestConstantSegment(rows.map(r => r.base1));
+      if (seg && seg.len >= Math.max(3, n * 0.2)) {
+        cards.push({
+          cls: 'warn',
+          ttl: 'base1 长时间恒定',
+          html: `base1（参考pad基线）在 ${seg.len} 个采样点（约 ${(seg.len / n * 100).toFixed(1)}%）上恒为 <code>${seg.value}</code>。
+          参考 pad 基线长时间不变，若 diff1 同步变化，说明参考电极与检测电极的基线跟踪行为不一致。
+          需核对参考 pad 的电极映射（CHLSEL0）与 AFE 配置。`
+        });
+      }
+    }
+
+    if (n >= 10) {
+      const d0 = rows.map(r => r.diff0).filter(v => typeof v === 'number');
+      if (d0.length >= 10) {
+        const mid = Math.floor(d0.length / 2);
+        const firstHalf = d0.slice(0, mid);
+        const secondHalf = d0.slice(mid);
+        const avg1 = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
+        const avg2 = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
+        const drift = avg2 - avg1;
+        const range = Math.max(...d0) - Math.min(...d0);
+        if (Math.abs(drift) > range * 0.3 && range > 500) {
+          cards.push({
+            cls: 'warn',
+            ttl: 'diff0 前后半段漂移',
+            html: `diff0（检测pad）前半段均值 ${avg1.toFixed(0)}，后半段均值 ${avg2.toFixed(0)}，
+            漂移 ${drift.toFixed(0)}（占全程幅值 ${(Math.abs(drift) / range * 100).toFixed(0)}%）。
+            若这是佩戴后 diff0 的单方向持续漂移，需结合 base0 一并查看：如果 base0 在同步爬升，
+            说明基线正在“吃掉”佩戴信号（即基线偷跑 / 动态 offset 回拉）。`
+          });
+        }
+      }
+    }
+
+    if (rows.some(r => typeof r.base0 === 'number') && n >= 10) {
+      const d0 = rows.map(r => r.diff0);
+      const b0 = rows.map(r => r.base0);
+      const corr = pearson(d0, b0);
+      if (Number.isFinite(corr) && Math.abs(corr) > 0.9) {
+        cards.push({
+          cls: 'warn',
+          ttl: 'diff0 与 base0 高度线性相关',
+          html: `diff0 与 base0 的皮尔逊相关系数 <code>${corr.toFixed(3)}</code>。
+          两者高度同步说明基线跟踪与差分输出“同频”，通常意味着 baseline 更新过快（BLFILTA 过小）
+          或存在运行时动态 offset 回拉。建议对照 HTML 报告：BLFILTA 0x8D0 vs 0x3E8D0、扫描周期 100ms vs 300ms。`
+        });
+      }
+    }
+
+    if (rows.some(r => typeof r.raw0 === 'number')) {
+      cards.push({
+        cls: 'info',
+        ttl: '检测到 8 字段格式',
+        html: `本次日志包含 valid0/valid1/raw0/raw1，已解析但本页默认只绘制 diff0/diff1/base0/base1 四条核心曲线。
+        如需查看 raw/valid，可在此基础上扩展。`
+      });
+    }
+
+    for (const c of cards) {
+      const div = document.createElement('div');
+      div.className = 'callout ' + c.cls;
+      div.innerHTML = `<div class="ttl">${c.ttl}</div><div>${c.html}</div>`;
+      area.appendChild(div);
+    }
+  }
+
+  function longestConstantSegment(vals) {
+    const n = vals.length;
+    if (!n) return null;
+    let best = null;
+    let curVal = vals[0], start = 0;
+    for (let i = 1; i <= n; i++) {
+      if (i === n || vals[i] !== curVal) {
+        const len = i - start;
+        if (len >= 3 && (!best || len > best.len)) {
+          best = { value: curVal, start, end: i - 1, len };
+        }
+        if (i < n) { curVal = vals[i]; start = i; }
+      }
+    }
+    return best;
+  }
+
+  function pearson(a, b) {
+    const n = Math.min(a.length, b.length);
+    if (n < 2) return NaN;
+    let sa = 0, sb = 0;
+    for (let i = 0; i < n; i++) { sa += a[i]; sb += b[i]; }
+    const ma = sa / n, mb = sb / n;
+    let num = 0, da = 0, db = 0;
+    for (let i = 0; i < n; i++) {
+      const x = a[i] - ma, y = b[i] - mb;
+      num += x * y; da += x * x; db += y * y;
+    }
+    const den = Math.sqrt(da * db);
+    return den === 0 ? NaN : num / den;
+  }
+
+  // ===================== 统计卡片 =====================
+  function renderStats(rows, formatInfo) {
+    const grid = document.getElementById('statsGrid');
+    grid.innerHTML = '';
+
+    const keys = [
+      { k: 'diff0', name: 'diff0 (检测pad)' },
+      { k: 'diff1', name: 'diff1 (参考pad)' },
+      { k: 'base0', name: 'base0 (检测pad基线)' },
+      { k: 'base1', name: 'base1 (参考pad基线)' }
+    ];
+    for (const { k, name } of keys) {
+      const st = calcStats(rows, k);
+      const card = document.createElement('div');
+      card.className = 'stat-card';
+      if (st) {
+        card.innerHTML = `
+          <div class="name">${name}</div>
+          <div class="row"><span>min</span><b>${st.min}</b></div>
+          <div class="row"><span>max</span><b>${st.max}</b></div>
+          <div class="row"><span>range</span><b>${st.range}</b></div>
+          <div class="row"><span>avg</span><b>${st.avg.toFixed(1)}</b></div>
+        `;
+      } else {
+        card.innerHTML = `<div class="name">${name}</div><div class="row"><span>无数据</span></div>`;
+      }
+      grid.appendChild(card);
+    }
+
+    document.getElementById('statsPanel').style.display = '';
+    const f4 = formatInfo.format4Count, f8 = formatInfo.format8Count;
+    let hint = `共 ${rows.length} 条 TP 记录`;
+    if (f4 && !f8) {
+      hint += `（4字段格式）`;
+    } else if (f8 && !f4) {
+      hint += `（8字段格式）`;
+    } else if (f4 && f8) {
+      hint += `（4字段: ${f4}，8字段: ${f8}）`;
+    }
+    document.getElementById('countHint').textContent = hint;
+  }
+
+  // ===================== 交互 =====================
+  const logInput = document.getElementById('logInput');
+  const errBox = document.getElementById('errBox');
+  const dropPanel = document.getElementById('dropPanel');
+  const dropHint = document.getElementById('dropHint');
+  const fileInput = document.getElementById('fileInput');
+
+  function showError(msg) {
+    errBox.textContent = msg;
+    errBox.style.display = msg ? 'block' : 'none';
+  }
+
+  // 生成波形（核心逻辑）
+  function generateFromText(text) {
+    showError('');
+    if (!text || !text.trim()) {
+      showError('请先粘贴日志数据或拖拽文件。');
+      return false;
+    }
+
+    const parsed = parseLog(text);
+    const rows = parsed.rows;
+    if (!rows.length) {
+      showError('未解析到任何 TP 记录。请确认格式为 $DFM,TP ...*CRC 或 TP ...（4字段或8字段）。BLE 日志需包含 TP 行。');
+      document.getElementById('statsPanel').style.display = 'none';
+      if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+      document.getElementById('chartsArea').innerHTML = '';
+      document.getElementById('insightArea').innerHTML = '';
+      return false;
+    }
+
+    renderStats(rows, parsed);
+    renderCombinedChart(rows);
+    renderInsights(rows);
+    return true;
+  }
+
+  function generate() {
+    return generateFromText(logInput.value);
+  }
+
+  function fillSample4() {
+    logInput.value = `$DFM,TP 526260,236,-44,121699*70
+$DFM,TP 526411,-130,-44,121793*53
+$DFM,TP 524292,-561,-44,121658*5A
+$DFM,TP 524897,-824,-44,121591*5F
+$DFM,TP 525099,202,-44,121605*75`;
+    showError('');
+  }
+
+  function fillSample8() {
+    logInput.value = `$DFM,TP 526260,236,-44,121699,1000,2000,526260,236*70
+$DFM,TP 526411,-130,-44,121793,1010,2010,526411,-130*53
+$DFM,TP 524292,-561,-44,121658,1020,2020,524292,-561*5A
+$DFM,TP 524897,-824,-44,121591,1030,2030,524897,-824*5F
+$DFM,TP 525099,202,-44,121605,1040,2040,525099,202*75`;
+    showError('');
+  }
+
+  function fillSampleBLE() {
+    // 从真实 BLE 日志中截取一小段示例（保留 Notify 行格式）
+    logInput.value = `14:19:12.637> [6e400002] 成功写入: "dfm touch 30"
+14:19:12.690> [6e400003] Notify: "$DFM,TP 77,158,-804,-3473*68
+"
+14:19:12.899> [6e400003] Notify: "$DFM,TP 1503,-111,-870,-3416*4F
+"
+14:19:13.120> [6e400003] Notify: "$DFM,TP 1171,110,-903,-3357*65
+"
+14:19:13.321> [6e400003] Notify: "$DFM,TP 261,93,-886,-3365*61
+"
+14:19:15.860> [6e400003] Notify: "$DFM,TP 106944,78974,-462,-2136*66
+"
+14:19:16.083> [6e400003] Notify: "$DFM,TP 530581,133720,-462,2085*77
+"
+14:19:16.380> [6e400003] Notify: "$DFM,TP 649505,132152,-462,6236*7A
+"
+14:19:16.559> [6e400003] Notify: "$DFM,TP 531747,87974,-462,9608*47
+"`;
+    showError('');
+  }
+
+  function clearAll() {
+    logInput.value = '';
+    showError('');
+    dropHint.innerHTML = `<span class="icon">📂</span><span>将文件拖拽到此面板任意位置，或点击下方按钮选择文件</span>`;
+    document.getElementById('statsPanel').style.display = 'none';
+    if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+    document.getElementById('chartsArea').innerHTML = '';
+    document.getElementById('insightArea').innerHTML = '';
+  }
+
+  function exportPNG() {
+    if (!chartInstance) { showError('请先生成波形图。'); return; }
+    const src = chartInstance.canvas;
+    const pad = 24;
+    const headerH = 56;
+    const out = document.createElement('canvas');
+    out.width = src.width + pad * 2;
+    out.height = src.height + headerH + pad * 2;
+    const ctx = out.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, out.width, out.height);
+
+    ctx.fillStyle = '#222';
+    ctx.font = '600 18px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillText('DFM Touch — diff0 / diff1 / base0 / base1 四合一波形', pad, 34);
+
+    ctx.fillStyle = '#666';
+    ctx.font = '12px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillText(`生成时间: ${new Date().toLocaleString()}`, pad, 52);
+
+    ctx.drawImage(src, pad, headerH);
+
+    const url = out.toDataURL('image/png');
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'dfm_touch_waveform_combined.png';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  // ===================== 文件拖拽 / 读取 =====================
+  function handleFile(file) {
+    if (!file) return;
+    // 限制文件类型（宽松）
+    const name = file.name || '';
+    const isText = /\.(txt|log|csv|json|xml|yaml|yml|md|ini|conf)$/i.test(name) || file.type.startsWith('text/');
+    if (!isText && file.type !== '') {
+      showError('请拖拽文本文件（.txt / .log / .csv 等）。');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = e.target.result;
+      logInput.value = content;
+      dropHint.innerHTML = `<span class="icon">✅</span><span>已加载文件：<span class="file-name">${escapeHtml(name)}</span></span>`;
+      showError('');
+      // 自动生成
+      generateFromText(content);
+    };
+    reader.onerror = () => {
+      showError('读取文件失败，请重试。');
+    };
+    reader.readAsText(file, 'UTF-8');
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"]/g, function (m) {
+      if (m === '&') return '&amp;';
+      if (m === '<') return '&lt;';
+      if (m === '>') return '&gt;';
+      if (m === '"') return '&quot;';
+      return m;
+    });
+  }
+
+  // 拖拽事件
+  dropPanel.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropPanel.classList.add('drag-over');
+  });
+  dropPanel.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropPanel.classList.remove('drag-over');
+  });
+  dropPanel.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropPanel.classList.remove('drag-over');
+    const files = e.dataTransfer.files;
+    if (files.length) {
+      handleFile(files[0]);
+    }
+  });
+
+  // 防止页面其他区域 drop 导致浏览器跳转
+  document.addEventListener('dragover', (e) => e.preventDefault());
+  document.addEventListener('drop', (e) => e.preventDefault());
+
+  // 选择文件按钮
+  document.getElementById('btnChooseFile').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length) handleFile(e.target.files[0]);
+    fileInput.value = ''; // 允许重新选择同一文件
+  });
+
+  // 按钮事件
+  document.getElementById('btnGenerate').addEventListener('click', generate);
+  document.getElementById('btnSample4').addEventListener('click', fillSample4);
+  document.getElementById('btnSample8').addEventListener('click', fillSample8);
+  document.getElementById('btnSampleBLE').addEventListener('click', fillSampleBLE);
+  document.getElementById('btnClear').addEventListener('click', clearAll);
+  document.getElementById('btnExport').addEventListener('click', exportPNG);
+
+  logInput.addEventListener('input', () => {
+    if (errBox.style.display === 'block') showError('');
+  });
+
+  // 页面加载后，如果 textarea 有内容则自动生成（可选）
+  // 但为避免空白报错，不自动执行
+
+  // ========== 附加：允许直接拖拽到输入框也触发 ==========
+  logInput.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropPanel.classList.add('drag-over');
+  });
+  logInput.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropPanel.classList.remove('drag-over');
+  });
+  logInput.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropPanel.classList.remove('drag-over');
+    const files = e.dataTransfer.files;
+    if (files.length) {
+      handleFile(files[0]);
+    }
+  });
+
+})();
+</script>
+</body>
+</html>

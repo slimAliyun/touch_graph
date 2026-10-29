@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DFM Touch 波形分析 · mask 触发四通道轨迹</title>
+  <!-- 顺序：Chart.js → Hammer.js → zoom 插件 -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+  <style>
+    :root {
+      --fg: #1a1a1a;
+      --fg-2: #555;
+      --fg-3: #888;
+      --line: #e3e6ea;
+      --bg-soft: #f7f8fa;
+      --blue-bg: #eef5ff;
+      --blue-bd: #b6d4fe;
+      --blue-fg: #084298;
+      --amber-bg: #fff8e6;
+      --amber-bd: #ffd966;
+      --amber-fg: #7a5b00;
+      --red-bg: #fdecea;
+      --red-bd: #f5b5ac;
+      --red-fg: #a12315;
+      --green-bg: #eaf6ec;
+      --green-bd: #a9dcb4;
+      --green-fg: #1e6b34;
+      --drop-bg: #f0f7ff;
+      --drop-bd: #3b82f6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px 16px 64px;
+      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+      color: var(--fg);
+      background: #fff;
+      line-height: 1.6;
+    }
+    .page { max-width: 1280px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    .subtitle { color: var(--fg-3); font-size: 13px; margin-bottom: 18px; }
+    .subtitle code { background: #f0f2f5; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-bottom: 16px;
+      background: var(--bg-soft);
+      transition: background .15s, border-color .15s;
+    }
+    .panel.drag-over {
+      background: var(--drop-bg);
+      border-color: var(--drop-bd);
+      border-style: dashed;
+      box-shadow: 0 0 0 3px rgba(59,130,246,.15);
+    }
+    .panel-title {
+      font-weight: 700;
+      font-size: 14px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .panel-title .hint { font-weight: 400; color: var(--fg-3); font-size: 12px; }
+
+    .drop-hint {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--blue-fg);
+      font-size: 13px;
+      background: var(--blue-bg);
+      border: 1px dashed var(--blue-bd);
+      border-radius: 8px;
+      padding: 8px 14px;
+      margin-bottom: 10px;
+    }
+    .drop-hint .icon { font-size: 18px; }
+    .drop-hint .file-name { font-weight: 600; }
+
+    textarea {
+      width: 100%;
+      min-height: 200px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+      font-size: 12.5px;
+      line-height: 1.5;
+      background: #fff;
+      color: var(--fg);
+      outline: none;
+    }
+    textarea:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.12); }
+
+    .btn-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; align-items: center; }
+    button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--fg);
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-size: 13.5px;
+      cursor: pointer;
+      transition: all .15s;
+      font-family: inherit;
+    }
+    button:hover { border-color: #3b82f6; color: #084298; background: var(--blue-bg); }
+    button.primary { background: #3b82f6; border-color: #3b82f6; color: #fff; font-weight: 600; }
+    button.primary:hover { background: #2563eb; color: #fff; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+
+    .check-group { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--fg-2); }
+    .check-group input { width: 15px; height: 15px; cursor: pointer; }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .stat-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #fff;
+      font-size: 12.5px;
+    }
+    .stat-card .name { font-weight: 700; font-size: 13.5px; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+    .stat-card .name .dot { display:inline-block; width:10px; height:10px; border-radius:50%; }
+    .stat-card .row { display: flex; justify-content: space-between; color: var(--fg-2); }
+    .stat-card .row b { color: var(--fg); font-weight: 600; }
+    .stat-card .row.trig b { color: #a12315; }
+
+    .mask-dist { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: #fff; margin-top: 10px; }
+    .mask-dist .title { font-weight: 700; font-size: 13.5px; margin-bottom: 10px; }
+    .mask-dist .subtitle2 { font-weight: 400; color: var(--fg-3); font-size: 12px; margin-left: 6px; }
+    .mask-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12.5px; font-family: "JetBrains Mono", Consolas, monospace; }
+    .mask-bar .lbl { width: 110px; text-align: right; color: var(--fg-2); font-weight: 600; }
+    .mask-bar .bar { flex: 1; height: 16px; background: #f0f2f5; border-radius: 3px; overflow: hidden; display: flex; }
+    .mask-bar .bar span { display: block; height: 100%; }
+    .mask-bar .cnt { width: 64px; text-align: right; color: var(--fg); font-weight: 600; }
+
+    .chart-wrap {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px 6px;
+      margin-bottom: 14px;
+      background: #fff;
+    }
+    .chart-title { font-weight: 700; font-size: 14px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }
+    .chart-title .hint { font-weight: 400; color: var(--fg-3); font-size: 12px; }
+    canvas { width: 100% !important; user-select: none; -webkit-user-select: none; cursor: grab; }
+    canvas:active { cursor: grabbing; }
+
+    .callout { border-radius: 8px; padding: 10px 14px; margin: 10px 0; border: 1px solid; font-size: 13px; }
+    .callout.info { background: var(--blue-bg); border-color: var(--blue-bd); }
+    .callout.info .ttl { color: var(--blue-fg); font-weight: 700; margin-bottom: 2px; }
+    .callout.warn { background: var(--amber-bg); border-color: var(--amber-bd); }
+    .callout.warn .ttl { color: var(--amber-fg); font-weight: 700; margin-bottom: 2px; }
+    .callout ul { margin: 4px 0 0; padding-left: 20px; }
+
+    .err { color: var(--red-fg); font-size: 13px; margin-top: 8px; display: none; background: var(--red-bg); border-radius: 6px; padding: 8px 12px; border: 1px solid var(--red-bd); }
+    .footer { margin-top: 32px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--fg-3); font-size: 12px; }
+
+    .legend-row { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 4px 0 2px; font-size: 12.5px; color: var(--fg-2); }
+    .legend-item { display: inline-flex; align-items: center; gap: 6px; }
+    .legend-item .line { display: inline-block; width: 18px; height: 3px; border-radius: 2px; }
+    /* 返回主页小房子 */
+    .home-btn {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: 1000;
+      width: 42px;
+      height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      background: #fff;
+      border: 1px solid var(--line, #e3e6ea);
+      box-shadow: 0 2px 10px rgba(0,0,0,.08);
+      color: var(--fg-2, #555);
+      text-decoration: none;
+      transition: all .15s;
+    }
+    .home-btn:hover {
+      border-color: #3b82f6;
+      color: #084298;
+      background: var(--blue-bg, #eef5ff);
+      box-shadow: 0 4px 16px rgba(59,130,246,.22);
+      transform: translateY(-1px);
+    }
+    .home-btn svg { width: 20px; height: 20px; display: block; }
+
+    /* 右键菜单 */
+    .ctx-menu {
+      position: fixed;
+      z-index: 9999;
+      min-width: 140px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 6px 20px rgba(0,0,0,.12);
+      padding: 4px 0;
+      font-size: 13px;
+      display: none;
+    }
+    .ctx-menu.show { display: block; }
+    .ctx-menu .item {
+      padding: 7px 14px;
+      cursor: pointer;
+      color: var(--fg);
+      white-space: nowrap;
+    }
+    .ctx-menu .item:hover { background: var(--blue-bg); color: var(--blue-fg); }
+    .ctx-menu .sep { height: 1px; background: var(--line); margin: 4px 0; }
+  </style>
+</head>
+<body>
+<a class="home-btn" href="index.html" title="返回模式选择" aria-label="返回模式选择">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 10.5 12 3l9 7.5"/>
+    <path d="M5 9.5V21h14V9.5"/>
+    <path d="M10 21v-6h4v6"/>
+  </svg>
+</a>
+<div class="page">
+
+  <h1>DFM Touch 波形分析 · mask 触发四通道轨迹</h1>
+  <div class="subtitle">
+    仅解析 <code>[时间] &lt;lvl&gt; app_wear: diff[a b] base[c d] mask[XXh]</code> 行。
+    X 轴为日志中的 <code>hh:mm:ss</code>。浅色细线为原始数据，粗线 + 标记点为 <b>mask 触发帧的四通道值</b>。
+    支持 <b>滚轮缩放 · 拖拽平移 · 右键菜单恢复 · 按钮恢复</b>。
+  </div>
+
+  <div class="panel" id="dropPanel">
+    <div class="panel-title">
+      <span>① 拖拽日志文件 或 粘贴数据</span>
+      <span class="hint">支持 .txt / .log / .csv 等文本文件</span>
+    </div>
+    <div class="drop-hint" id="dropHint">
+      <span class="icon">📂</span>
+      <span>将文件拖拽到此面板任意位置，或点击下方按钮选择文件</span>
+    </div>
+    <textarea id="logInput" placeholder="粘贴 app_wear 日志，例如：
+[2026-10-29 17:36:30.921] <wrn> app_wear: diff[-36098 -11781] base[35704 8531] mask[0Fh]
+[2026-10-29 17:36:31.921] <wrn> app_wear: diff[-19605 -6927] base[19095 4058] mask[0Dh]"></textarea>
+
+    <div class="btn-row">
+      <button class="primary" id="btnGenerate">生成波形图</button>
+      <button id="btnSample">填入示例</button>
+      <button id="btnClear">清空</button>
+      <button id="btnExport">导出 PNG</button>
+      <button id="btnResetZoom">恢复原图</button>
+      <input type="file" id="fileInput" accept=".txt,.log,.csv,text/*" style="display:none">
+      <button id="btnChooseFile">选择文件</button>
+      <span style="flex:1"></span>
+      <label class="check-group"><input type="checkbox" id="chkRaw" checked> 显示原始曲线</label>
+      <label class="check-group"><input type="checkbox" id="chkTrace" checked> 显示触发轨迹</label>
+      <label class="check-group"><input type="checkbox" id="chkLine" checked> 触发点连线</label>
+    </div>
+    <div class="err" id="errBox"></div>
+  </div>
+
+  <div class="panel" id="statsPanel" style="display:none;">
+    <div class="panel-title">
+      <span>② 数据统计</span>
+      <span class="hint" id="countHint"></span>
+    </div>
+    <div class="stats" id="statsGrid"></div>
+    <div class="mask-dist" id="maskDist"></div>
+  </div>
+
+  <div id="chartsArea"></div>
+
+  <div class="callout info">
+    <div class="ttl">操作与读图说明</div>
+    <ul>
+      <li><b>滚轮</b> 缩放时间轴 · <b>直接拖拽</b> 平移 · <b>图表内右键</b> 弹出菜单（恢复原图 / 导出 PNG） · 或点上方 <b>「恢复原图」</b> 按钮；</li>
+      <li>细实线 = 全部 <code>app_wear</code> 帧的原始值（背景）；</li>
+      <li>粗线 + 标记点 = <b>所有 mask≠0 的触发帧的四通道值</b>：每笔触发记录四个点，四条轨迹线同步出现，<b>不会断开</b>；</li>
+      <li>标记形状：diff0 ▲、diff1 ■、base0 ●、base1 ◆；点间连线仅连接<b>相邻两次触发帧</b>，<b>不代表连续采样</b>；</li>
+      <li>某通道在某触发帧的值为"伴随值"（该帧不一定是该通道触发），四通道是否触发以 <b>mask 分布</b> 和统计卡片为准；</li>
+      <li>鼠标悬停任意触发点，tooltip 显示该帧绝对时间、四通道值与 mask；</li>
+      <li>mask 分布按 <b>bit</b> 统计：组合帧（如 0Fh）会同时计入 01h/02h/04h/08h 四个位，故各项之和 ≥ 总帧数。</li>
+    </ul>
+  </div>
+
+  <div class="footer">
+    mask 位定义：bit0=diff0(01h)、bit1=diff1(02h)、bit2=base0(04h)、bit3=base1(08h)，组合为按位或。
+  </div>
+</div>
+
+<!-- 右键菜单 -->
+<div class="ctx-menu" id="ctxMenu">
+  <div class="item" id="ctxResetZoom">恢复原图</div>
+  <div class="sep"></div>
+  <div class="item" id="ctxExportPNG">导出 PNG</div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ===================== 插件注册兜底 =====================
+  if (window.Chart && window.ChartZoom) {
+    if (!Chart.registry || !Chart.registry.plugins.get('zoom')) {
+      Chart.register(window.ChartZoom);
+    }
+  }
+
+  // ===================== 解析 =====================
+  const RE_WEAR = /^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]\s*<\w+>\s*app_wear:\s*diff\[\s*(-?\d+)\s+(-?\d+)\s*\]\s*base\[\s*(-?\d+)\s+(-?\d+)\s*\]\s*mask\[([0-9A-Fa-f]+)h\]/;
+
+  function parseLog(text) {
+    const rows = [];
+    const lines = text.split(/\r?\n/);
+    for (const line of lines) {
+      const s = line.trim();
+      if (!s || !s.includes('app_wear')) continue;
+      const m = s.match(RE_WEAR);
+      if (!m) continue;
+      const ts = new Date(m[1].replace(' ', 'T')).getTime();
+      if (!Number.isFinite(ts)) continue;
+      rows.push({
+        tsStr: m[1],
+        ts,
+        diff0: +m[2], diff1: +m[3],
+        base0: +m[4], base1: +m[5],
+        mask: parseInt(m[6], 16)
+      });
+    }
+    rows.sort((a, b) => a.ts - b.ts);
+    return rows;
+  }
+
+  // ===================== 时间格式化（零时区风险） =====================
+  // "2026-10-29 17:36:30.921" → 一天内秒数 17*3600+36*60+30
+  function hmsToSec(tsStr) {
+    const hh = +tsStr.slice(11, 13);
+    const mm = +tsStr.slice(14, 16);
+    const ss = +tsStr.slice(17, 19);
+    return hh * 3600 + mm * 60 + ss;
+  }
+
+  // 一天内秒数 → "hh:mm:ss"（跨天自动回绕）
+  function secToHMS(sec) {
+    sec = ((sec % 86400) + 86400) % 86400;
+    const hh = String(Math.floor(sec / 3600)).padStart(2, '0');
+    const mm = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
+    const ss = String(Math.floor(sec % 60)).padStart(2, '0');
+    return `${hh}:${mm}:${ss}`;
+  }
+
+  // ===================== 统计 =====================
+  function calcStats(rows, key) {
+    let min = Infinity, max = -Infinity, sum = 0, cnt = 0;
+    for (const r of rows) {
+      const v = r[key];
+      if (!Number.isFinite(v)) continue;
+      if (v < min) min = v;
+      if (v > max) max = v;
+      sum += v;
+      cnt++;
+    }
+    if (!cnt) return null;
+    return { min, max, range: max - min, avg: sum / cnt, n: cnt };
+  }
+
+  function countMask(rows, bit) {
+    let c = 0;
+    for (const r of rows) if (r.mask & bit) c++;
+    return c;
+  }
+
+  function maskHistogram(rows) {
+    const bits = [
+      { bit: 0x01, label: '01h (diff0)', color: COLORS.diff0.line },
+      { bit: 0x02, label: '02h (diff1)', color: COLORS.diff1.line },
+      { bit: 0x04, label: '04h (base0)', color: COLORS.base0.line },
+      { bit: 0x08, label: '08h (base1)', color: COLORS.base1.line }
+    ];
+    const result = bits.map(b => {
+      let cnt = 0;
+      for (const r of rows) if (r.mask & b.bit) cnt++;
+      return { label: b.label, cnt, color: b.color };
+    });
+    result.sort((a, b) => b.cnt - a.cnt);
+    return result;
+  }
+
+  // ===================== 图表 =====================
+  let chartInstance = null;
+
+  const COLORS = {
+    diff0: { line: '#2563eb', raw: 'rgba(37,99,235,.45)' },
+    diff1: { line: '#f59e0b', raw: 'rgba(245,158,11,.45)' },
+    base0: { line: '#10b981', raw: 'rgba(16,185,129,.45)' },
+    base1: { line: '#ef4444', raw: 'rgba(239,68,68,.45)' }
+  };
+  const POINT_STYLES = {
+    diff0: 'triangle',
+    diff1: 'rect',
+    base0: 'circle',
+    base1: 'rectRot'
+  };
+
+  function buildTriggerSeries(rows, key, ts0) {
+    const out = [];
+    for (const r of rows) {
+      if (r.mask !== 0) out.push({ x: r.ts - ts0, y: r[key] });
+    }
+    return out;
+  }
+
+  function renderChart(rows) {
+    const area = document.getElementById('chartsArea');
+    area.innerHTML = '';
+    if (!rows.length) return;
+
+    const ts0 = rows[0].ts;
+    const baseSec = hmsToSec(rows[0].tsStr);   // 首帧一天内秒数
+    const showRaw = document.getElementById('chkRaw').checked;
+    const showTrace = document.getElementById('chkTrace').checked;
+    const showLine = document.getElementById('chkLine').checked;
+
+    const rawData = {
+      diff0: rows.map(r => ({ x: r.ts - ts0, y: r.diff0 })),
+      diff1: rows.map(r => ({ x: r.ts - ts0, y: r.diff1 })),
+      base0: rows.map(r => ({ x: r.ts - ts0, y: r.base0 })),
+      base1: rows.map(r => ({ x: r.ts - ts0, y: r.base1 }))
+    };
+
+    const datasets = [];
+
+    if (showRaw) {
+      for (const key of ['diff0', 'diff1', 'base0', 'base1']) {
+        datasets.push({
+          label: `${key} 原始`,
+          data: rawData[key],
+          borderColor: COLORS[key].raw,
+          backgroundColor: 'transparent',
+          borderWidth: 1,
+          pointRadius: 0,
+          pointHitRadius: 0,
+          tension: 0,
+          fill: false,
+          showLine: true,
+          order: 10
+        });
+      }
+    }
+
+    if (showTrace) {
+      for (const key of ['diff0', 'diff1', 'base0', 'base1']) {
+        datasets.push({
+          label: `${key} 触发帧值`,
+          data: buildTriggerSeries(rows, key, ts0),
+          borderColor: COLORS[key].line,
+          backgroundColor: COLORS[key].line,
+          borderWidth: 1.6,
+          pointRadius: 3,
+          pointHoverRadius: 6,
+          pointStyle: POINT_STYLES[key],
+          pointBorderColor: '#fff',
+          pointBorderWidth: 1,
+          tension: 0,
+          fill: false,
+          showLine: showLine,
+          order: 1
+        });
+      }
+    }
+
+    const wrap = document.createElement('div');
+    wrap.className = 'chart-wrap';
+    const title = document.createElement('div');
+    title.className = 'chart-title';
+    const trigCount = rows.filter(r => r.mask !== 0).length;
+    title.innerHTML = `<span>四通道原始波形 + mask 触发帧四通道值</span>
+      <span class="hint">共 ${rows.length} 帧，触发帧 ${trigCount} 笔 · X 轴 hh:mm:ss · 滚轮缩放 / 拖拽平移 / 右键菜单</span>`;
+    wrap.appendChild(title);
+
+    const legend = document.createElement('div');
+    legend.className = 'legend-row';
+    legend.innerHTML = `
+      <span class="legend-item"><span class="line" style="background:${COLORS.diff0.line}"></span>diff0 ▲</span>
+      <span class="legend-item"><span class="line" style="background:${COLORS.diff1.line}"></span>diff1 ■</span>
+      <span class="legend-item"><span class="line" style="background:${COLORS.base0.line}"></span>base0 ●</span>
+      <span class="legend-item"><span class="line" style="background:${COLORS.base1.line}"></span>base1 ◆</span>
+      <span class="legend-item" style="color:#888">粗线+点 = 触发帧四通道值；细线 = 原始帧</span>
+    `;
+    wrap.appendChild(legend);
+
+    const canvas = document.createElement('canvas');
+    canvas.style.maxHeight = '620px';
+    wrap.appendChild(canvas);
+    area.appendChild(wrap);
+
+    canvas.addEventListener('dblclick', (e) => e.preventDefault());
+    canvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showCtxMenu(e.clientX, e.clientY);
+    });
+
+    const tsMap = new Map();
+    for (const r of rows) tsMap.set(r.ts - ts0, r);
+    function findRow(x) {
+      if (tsMap.has(x)) return tsMap.get(x);
+      for (const [k, v] of tsMap) if (Math.abs(k - x) < 0.5) return v;
+      return null;
+    }
+
+    const cfg = {
+      type: 'line',
+      data: { datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        animation: false,
+        interaction: { mode: 'nearest', intersect: true },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) => {
+                const r = findRow(items[0].parsed.x);
+                if (!r) return '';
+                return `${r.tsStr}  mask[${r.mask.toString(16).toUpperCase().padStart(2,'0')}h]`;
+              },
+              label: (item) => {
+                const r = findRow(item.parsed.x);
+                if (!r) return `${item.dataset.label}: ${item.parsed.y}`;
+                return `diff[${r.diff0} ${r.diff1}] base[${r.base0} ${r.base1}]`;
+              }
+            }
+          },
+          zoom: {
+            pan: {
+              enabled: true,
+              mode: 'x',
+              modifierKey: null,
+              threshold: 10
+            },
+            zoom: {
+              wheel: { enabled: true, speed: 0.1 },
+              pinch: { enabled: true },
+              mode: 'x',
+              doubleClick: { enabled: true, mode: 'reset' }
+            },
+            limits: {
+              x: { min: 'original', max: 'original' },
+              y: { min: 'original', max: 'original' }
+            }
+          }
+        },
+        scales: {
+          x: {
+            type: 'linear',
+            title: { display: true, text: '时间 (hh:mm:ss)', color: '#888', font: { size: 11 } },
+            ticks: {
+              color: '#888', maxTicksLimit: 12, font: { size: 11 },
+              callback: (v) => {
+                // v 为相对首帧的毫秒偏移；还原成一天内秒数后格式化
+                const totalSec = baseSec + Math.round(v / 1000);
+                return secToHMS(totalSec);
+              }
+            },
+            grid: { color: 'rgba(0,0,0,.05)' }
+          },
+          y: {
+            title: { display: true, text: '数值', color: '#888', font: { size: 11 } },
+            ticks: { color: '#888', font: { size: 11 } },
+            grid: { color: 'rgba(0,0,0,.05)' }
+          }
+        }
+      }
+    };
+
+    if (chartInstance) chartInstance.destroy();
+    chartInstance = new Chart(canvas, cfg);
+  }
+
+  // ===================== 统计面板 =====================
+  function renderStats(rows) {
+    const grid = document.getElementById('statsGrid');
+    grid.innerHTML = '';
+    const keys = [
+      { k: 'diff0', name: 'diff0 (检测pad)', bit: 0x01, color: COLORS.diff0.line },
+      { k: 'diff1', name: 'diff1 (参考pad)', bit: 0x02, color: COLORS.diff1.line },
+      { k: 'base0', name: 'base0 (检测pad基线)', bit: 0x04, color: COLORS.base0.line },
+      { k: 'base1', name: 'base1 (参考pad基线)', bit: 0x08, color: COLORS.base1.line }
+    ];
+    for (const { k, name, bit, color } of keys) {
+      const st = calcStats(rows, k);
+      const trig = countMask(rows, bit);
+      const card = document.createElement('div');
+      card.className = 'stat-card';
+      if (st) {
+        card.innerHTML = `
+          <div class="name"><span class="dot" style="background:${color}"></span>${name}</div>
+          <div class="row"><span>min / max</span><b>${st.min} / ${st.max}</b></div>
+          <div class="row"><span>range</span><b>${st.range}</b></div>
+          <div class="row"><span>avg</span><b>${st.avg.toFixed(1)}</b></div>
+          <div class="row trig"><span>mask 触发次数</span><b>${trig}</b></div>
+        `;
+      } else {
+        card.innerHTML = `<div class="name">${name}</div><div class="row"><span>无数据</span></div>`;
+      }
+      grid.appendChild(card);
+    }
+
+    const hist = maskHistogram(rows);
+    const maxCnt = hist.length ? Math.max(...hist.map(h => h.cnt)) : 1;
+    const dist = document.getElementById('maskDist');
+    dist.innerHTML = '<div class="title">mask 分布（按 bit 统计）<span class="subtitle2">组合帧计入多位，各项之和 ≥ 总帧数</span></div>' +
+      hist.map(h => {
+        const pct = maxCnt > 0 ? (h.cnt / maxCnt * 100).toFixed(1) : 0;
+        return `<div class="mask-bar">
+          <span class="lbl" style="color:${h.color}">${h.label}</span>
+          <span class="bar"><span style="width:${pct}%;background:${h.color};"></span></span>
+          <span class="cnt">${h.cnt} 次</span>
+        </div>`;
+      }).join('');
+
+    document.getElementById('statsPanel').style.display = '';
+    const t0 = rows[0].ts, t1 = rows[rows.length - 1].ts;
+    const span = (t1 - t0) / 1000;
+    const avgGap = rows.length > 1 ? (t1 - t0) / (rows.length - 1) / 1000 : 0;
+    const trigCount = rows.filter(r => r.mask !== 0).length;
+    document.getElementById('countHint').textContent =
+      `共 ${rows.length} 帧 · 触发 ${trigCount} 笔 · 时间跨度 ${span.toFixed(1)} s · 平均间隔 ${avgGap.toFixed(2)} s`;
+  }
+
+  // ===================== 右键菜单 =====================
+  const ctxMenu = document.getElementById('ctxMenu');
+
+  function hideCtxMenu() {
+    ctxMenu.classList.remove('show');
+  }
+
+  function showCtxMenu(x, y) {
+    ctxMenu.style.left = x + 'px';
+    ctxMenu.style.top = y + 'px';
+    ctxMenu.classList.add('show');
+    const rect = ctxMenu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) {
+      ctxMenu.style.left = (window.innerWidth - rect.width - 4) + 'px';
+    }
+    if (rect.bottom > window.innerHeight) {
+      ctxMenu.style.top = (window.innerHeight - rect.height - 4) + 'px';
+    }
+  }
+
+  document.addEventListener('click', (e) => {
+    if (!ctxMenu.contains(e.target)) hideCtxMenu();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') hideCtxMenu();
+  });
+  window.addEventListener('resize', hideCtxMenu);
+
+  document.getElementById('ctxResetZoom').addEventListener('click', () => {
+    if (chartInstance) chartInstance.resetZoom();
+    hideCtxMenu();
+  });
+  document.getElementById('ctxExportPNG').addEventListener('click', () => {
+    exportPNG();
+    hideCtxMenu();
+  });
+
+  // ===================== 主流程 =====================
+  const logInput = document.getElementById('logInput');
+  const errBox = document.getElementById('errBox');
+  const dropPanel = document.getElementById('dropPanel');
+  const dropHint = document.getElementById('dropHint');
+  const fileInput = document.getElementById('fileInput');
+
+  function showError(msg) {
+    errBox.textContent = msg || '';
+    errBox.style.display = msg ? 'block' : 'none';
+  }
+
+  function generateFromText(text) {
+    showError('');
+    if (!text || !text.trim()) { showError('请先粘贴日志数据或拖拽文件。'); return; }
+    const rows = parseLog(text);
+    if (!rows.length) {
+      showError('未解析到 app_wear 行。请确认格式为：[YYYY-MM-DD HH:MM:SS.mmm] <lvl> app_wear: diff[a b] base[c d] mask[XXh]');
+      document.getElementById('statsPanel').style.display = 'none';
+      if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+      document.getElementById('chartsArea').innerHTML = '';
+      return;
+    }
+    renderStats(rows);
+    renderChart(rows);
+  }
+
+  function fillSample() {
+    logInput.value = `[2026-10-29 17:36:30.921] <wrn> app_wear: diff[-36098 -11781] base[35704 8531] mask[0Fh]
+[2026-10-29 17:36:31.921] <wrn> app_wear: diff[-19605 -6927] base[19095 4058] mask[0Dh]
+[2026-10-29 17:36:32.921] <wrn> app_wear: diff[272635 54333] base[11622 3314] mask[07h]
+[2026-10-29 17:36:33.921] <wrn> app_wear: diff[674140 120058] base[11622 19125] mask[0Bh]
+[2026-10-29 17:36:34.921] <wrn> app_wear: diff[692113 104554] base[11622 36611] mask[0Bh]
+[2026-10-29 17:36:35.921] <wrn> app_wear: diff[695606 89706] base[11622 51700] mask[0Ah]
+[2026-10-29 17:36:36.921] <wrn> app_wear: diff[698828 77399] base[11622 64663] mask[0Ah]
+[2026-10-29 17:36:37.921] <wrn> app_wear: diff[701562 67766] base[11622 74740] mask[0Ah]
+[2026-10-29 17:36:38.921] <wrn> app_wear: diff[709783 58698] base[11622 84751] mask[0Ah]
+[2026-10-29 17:36:39.921] <wrn> app_wear: diff[708198 47491] base[11622 93198] mask[0Ah]
+[2026-10-29 17:36:40.921] <wrn> app_wear: diff[700857 44451] base[11622 99690] mask[08h]
+[2026-10-29 17:36:41.925] <wrn> app_wear: diff[527554 49857] base[11622 93405] mask[09h]
+[2026-10-29 17:36:42.976] <wrn> app_wear: diff[651115 46689] base[11622 92696] mask[01h]
+[2026-10-29 17:36:43.921] <wrn> app_wear: diff[581407 33521] base[11622 99179] mask[0Bh]
+[2026-10-29 17:36:44.921] <wrn> app_wear: diff[626924 37190] base[11622 104582] mask[09h]
+[2026-10-29 17:36:45.921] <wrn> app_wear: diff[658515 31545] base[11622 109551] mask[09h]
+[2026-10-29 17:36:46.921] <wrn> app_wear: diff[679608 26824] base[11622 114195] mask[09h]
+[2026-10-29 17:36:47.921] <wrn> app_wear: diff[680031 23595] base[11622 117861] mask[08h]
+[2026-10-29 17:36:48.921] <wrn> app_wear: diff[682147 23544] base[11622 121334] mask[08h]
+[2026-10-29 17:36:49.921] <wrn> app_wear: diff[686194 17022] base[11622 124343] mask[0Ah]
+[2026-10-29 17:36:51.921] <wrn> app_wear: diff[685342 12467] base[11622 128895] mask[08h]
+[2026-10-29 17:36:53.921] <wrn> app_wear: diff[672543 9288] base[11622 132502] mask[08h]
+[2026-10-29 17:36:56.921] <wrn> app_wear: diff[673810 5620] base[11622 135771] mask[08h]`;
+    showError('');
+  }
+
+  function clearAll() {
+    logInput.value = '';
+    showError('');
+    dropHint.innerHTML = `<span class="icon">📂</span><span>将文件拖拽到此面板任意位置，或点击下方按钮选择文件</span>`;
+    document.getElementById('statsPanel').style.display = 'none';
+    if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+    document.getElementById('chartsArea').innerHTML = '';
+  }
+
+  function exportPNG() {
+    if (!chartInstance) { showError('请先生成波形图。'); return; }
+    const src = chartInstance.canvas;
+    const pad = 24, headerH = 56;
+    const out = document.createElement('canvas');
+    out.width = src.width + pad * 2;
+    out.height = src.height + headerH + pad * 2;
+    const ctx = out.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, out.width, out.height);
+    ctx.fillStyle = '#222';
+    ctx.font = '600 18px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.fillText('DFM Touch — 四通道原始波形 + mask 触发帧四通道值', pad, 34);
+    ctx.fillStyle = '#666';
+    ctx.font = '12px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.fillText(`生成时间: ${new Date().toLocaleString()}`, pad, 52);
+    ctx.drawImage(src, pad, headerH);
+    const url = out.toDataURL('image/png');
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'dfm_touch_mask_trigger_4ch.png';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }
+
+  function handleFile(file) {
+    if (!file) return;
+    const name = file.name || '';
+    const isText = /\.(txt|log|csv|json|xml|yaml|yml|md|ini|conf)$/i.test(name) || file.type.startsWith('text/');
+    if (!isText && file.type !== '') { showError('请拖拽文本文件（.txt / .log / .csv 等）。'); return; }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = e.target.result;
+      logInput.value = content;
+      dropHint.innerHTML = `<span class="icon">✅</span><span>已加载文件：<span class="file-name">${escapeHtml(name)}</span></span>`;
+      showError('');
+      generateFromText(content);
+    };
+    reader.onerror = () => showError('读取文件失败，请重试。');
+    reader.readAsText(file, 'UTF-8');
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  }
+
+  // 拖拽
+  dropPanel.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); dropPanel.classList.add('drag-over'); });
+  dropPanel.addEventListener('dragleave', e => { e.preventDefault(); e.stopPropagation(); dropPanel.classList.remove('drag-over'); });
+  dropPanel.addEventListener('drop', e => {
+    e.preventDefault(); e.stopPropagation(); dropPanel.classList.remove('drag-over');
+    if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+  });
+  document.addEventListener('dragover', e => e.preventDefault());
+  document.addEventListener('drop', e => e.preventDefault());
+
+  logInput.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); dropPanel.classList.add('drag-over'); });
+  logInput.addEventListener('dragleave', e => { e.preventDefault(); e.stopPropagation(); dropPanel.classList.remove('drag-over'); });
+  logInput.addEventListener('drop', e => {
+    e.preventDefault(); e.stopPropagation(); dropPanel.classList.remove('drag-over');
+    if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+  });
+
+  // 按钮
+  document.getElementById('btnChooseFile').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', e => {
+    if (e.target.files.length) handleFile(e.target.files[0]);
+    fileInput.value = '';
+  });
+  document.getElementById('btnGenerate').addEventListener('click', () => generateFromText(logInput.value));
+  document.getElementById('btnSample').addEventListener('click', fillSample);
+  document.getElementById('btnClear').addEventListener('click', clearAll);
+  document.getElementById('btnExport').addEventListener('click', exportPNG);
+
+  document.getElementById('btnResetZoom').addEventListener('click', () => {
+    if (chartInstance) chartInstance.resetZoom();
+  });
+
+  ['chkRaw','chkTrace','chkLine'].forEach(id => {
+    document.getElementById(id).addEventListener('change', () => {
+      const text = logInput.value;
+      if (!text.trim()) return;
+      const rows = parseLog(text);
+      if (rows.length) renderChart(rows);
+    });
+  });
+
+  logInput.addEventListener('input', () => { if (errBox.style.display === 'block') showError(''); });
+
+})();
+</script>
+</body>
+</html>
