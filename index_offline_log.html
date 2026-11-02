@@ -239,9 +239,10 @@
 
   <h1>DFM Touch 波形分析 · mask 触发四通道轨迹</h1>
   <div class="subtitle">
-    仅解析 <code>[时间] &lt;lvl&gt; app_wear: diff[a b] base[c d] mask[XXh]</code> 行。
-    X 轴为日志中的 <code>hh:mm:ss</code>。浅色细线为原始数据，粗线 + 标记点为 <b>mask 触发帧的四通道值</b>。
-    支持 <b>滚轮缩放 · 拖拽平移 · 右键菜单恢复 · 按钮恢复</b>。
+    解析 <code>app_wear: diff[a b] base[c d] mask[XXh]</code> 帧，以及 AW 回调
+    <code>[aw] wear state:0/1</code>（匹配到 <code>wear state:0|1</code> 即可）。
+    X 轴为日志中的 <code>hh:mm:ss</code>。浅色细线为原始数据，粗线 + 标记点为 <b>mask 触发帧的四通道值</b>；
+    淡绿/淡红背景为 AW 佩戴态持有区间。支持 <b>滚轮缩放 · 拖拽平移 · 右键菜单恢复 · 按钮恢复</b>。
   </div>
 
   <div class="panel" id="dropPanel">
@@ -269,6 +270,7 @@
       <label class="check-group"><input type="checkbox" id="chkRaw" checked> 显示原始曲线</label>
       <label class="check-group"><input type="checkbox" id="chkTrace" checked> 显示触发轨迹</label>
       <label class="check-group"><input type="checkbox" id="chkLine" checked> 触发点连线</label>
+      <label class="check-group"><input type="checkbox" id="chkWearBg" checked> AW 佩戴背景</label>
     </div>
     <div class="err" id="errBox"></div>
   </div>
@@ -288,9 +290,10 @@
     <div class="ttl">操作与读图说明</div>
     <ul>
       <li><b>滚轮</b> 缩放时间轴 · <b>直接拖拽</b> 平移 · <b>图表内右键</b> 弹出菜单（恢复原图 / 导出 PNG） · 或点上方 <b>「恢复原图」</b> 按钮；</li>
-      <li>细实线 = 全部 <code>app_wear</code> 帧的原始值（背景）；</li>
+      <li>细实线 = 全部 <code>app_wear</code> 帧的原始值；</li>
       <li>粗线 + 标记点 = <b>所有 mask≠0 的触发帧的四通道值</b>：每笔触发记录四个点，四条轨迹线同步出现，<b>不会断开</b>；</li>
       <li>标记形状：diff0 ▲、diff1 ■、base0 ●、base1 ◆；点间连线仅连接<b>相邻两次触发帧</b>，<b>不代表连续采样</b>；</li>
+      <li><b>淡绿 / 淡红竖向色带</b> = AW 芯片回调 <code>wear state:1/0</code> 的持有区间（状态变化才打 log，下一次变化前保持；首条之前为未知、不涂色）；</li>
       <li>某通道在某触发帧的值为"伴随值"（该帧不一定是该通道触发），四通道是否触发以 <b>mask 分布</b> 和统计卡片为准；</li>
       <li>鼠标悬停任意触发点，tooltip 显示该帧绝对时间、四通道值与 mask；</li>
       <li>mask 分布按 <b>bit</b> 统计：组合帧（如 0Fh）会同时计入 01h/02h/04h/08h 四个位，故各项之和 ≥ 总帧数。</li>
@@ -321,28 +324,65 @@
   }
 
   // ===================== 解析 =====================
+  const RE_TS = /^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]/;
   const RE_WEAR = /^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]\s*<\w+>\s*app_wear:\s*diff\[\s*(-?\d+)\s+(-?\d+)\s*\]\s*base\[\s*(-?\d+)\s+(-?\d+)\s*\]\s*mask\[([0-9A-Fa-f]+)h\]/;
+  const RE_AW_STATE = /wear state:([01])\b/;
 
   function parseLog(text) {
     const rows = [];
+    const wearEvents = [];
     const lines = text.split(/\r?\n/);
     for (const line of lines) {
       const s = line.trim();
-      if (!s || !s.includes('app_wear')) continue;
-      const m = s.match(RE_WEAR);
-      if (!m) continue;
-      const ts = new Date(m[1].replace(' ', 'T')).getTime();
-      if (!Number.isFinite(ts)) continue;
-      rows.push({
-        tsStr: m[1],
-        ts,
-        diff0: +m[2], diff1: +m[3],
-        base0: +m[4], base1: +m[5],
-        mask: parseInt(m[6], 16)
-      });
+      if (!s) continue;
+
+      const mFrame = s.match(RE_WEAR);
+      if (mFrame) {
+        const ts = new Date(mFrame[1].replace(' ', 'T')).getTime();
+        if (Number.isFinite(ts)) {
+          rows.push({
+            tsStr: mFrame[1],
+            ts,
+            diff0: +mFrame[2], diff1: +mFrame[3],
+            base0: +mFrame[4], base1: +mFrame[5],
+            mask: parseInt(mFrame[6], 16)
+          });
+        }
+        continue;
+      }
+
+      // AW 芯片回调：LOG_WRN("[aw] wear state:%d", worn) → 行内含 wear state:0/1
+      const mState = s.match(RE_AW_STATE);
+      if (mState) {
+        const mTs = s.match(RE_TS);
+        if (!mTs) continue;
+        const ts = new Date(mTs[1].replace(' ', 'T')).getTime();
+        if (!Number.isFinite(ts)) continue;
+        wearEvents.push({
+          tsStr: mTs[1],
+          ts,
+          state: +mState[1]   // 0=未佩戴, 1=已佩戴
+        });
+      }
     }
     rows.sort((a, b) => a.ts - b.ts);
-    return rows;
+    wearEvents.sort((a, b) => a.ts - b.ts);
+    return { rows, wearEvents };
+  }
+
+  /** 将 AW wear state 事件转为持有区间；首条事件之前为未知（不涂色） */
+  function buildWearBands(wearEvents, xMin, xMax, ts0) {
+    const bands = [];
+    if (!wearEvents.length || !Number.isFinite(xMin) || !Number.isFinite(xMax)) return bands;
+    for (let i = 0; i < wearEvents.length; i++) {
+      const start = Math.max(xMin, wearEvents[i].ts - ts0);
+      const end = Math.min(
+        xMax,
+        i + 1 < wearEvents.length ? (wearEvents[i + 1].ts - ts0) : xMax
+      );
+      if (end > start) bands.push({ x0: start, x1: end, state: wearEvents[i].state });
+    }
+    return bands;
   }
 
   // ===================== 时间格式化（零时区风险） =====================
@@ -424,16 +464,21 @@
     return out;
   }
 
-  function renderChart(rows) {
+  function renderChart(rows, wearEvents) {
     const area = document.getElementById('chartsArea');
     area.innerHTML = '';
     if (!rows.length) return;
+    wearEvents = wearEvents || [];
 
     const ts0 = rows[0].ts;
     const baseSec = hmsToSec(rows[0].tsStr);   // 首帧一天内秒数
     const showRaw = document.getElementById('chkRaw').checked;
     const showTrace = document.getElementById('chkTrace').checked;
     const showLine = document.getElementById('chkLine').checked;
+    const showWearBg = document.getElementById('chkWearBg').checked;
+    const xMin = 0;
+    const xMax = rows[rows.length - 1].ts - ts0;
+    const wearBands = showWearBg ? buildWearBands(wearEvents, xMin, xMax, ts0) : [];
 
     const rawData = {
       diff0: rows.map(r => ({ x: r.ts - ts0, y: r.diff0 })),
@@ -489,7 +534,7 @@
     title.className = 'chart-title';
     const trigCount = rows.filter(r => r.mask !== 0).length;
     title.innerHTML = `<span>四通道原始波形 + mask 触发帧四通道值</span>
-      <span class="hint">共 ${rows.length} 帧，触发帧 ${trigCount} 笔 · X 轴 hh:mm:ss · 滚轮缩放 / 拖拽平移 / 右键菜单</span>`;
+      <span class="hint">共 ${rows.length} 帧，触发帧 ${trigCount} 笔 · AW 佩戴事件 ${wearEvents.length} 次 · X 轴 hh:mm:ss · 滚轮缩放 / 拖拽平移 / 右键菜单</span>`;
     wrap.appendChild(title);
 
     const legend = document.createElement('div');
@@ -499,7 +544,9 @@
       <span class="legend-item"><span class="line" style="background:${COLORS.diff1.line}"></span>diff1 ■</span>
       <span class="legend-item"><span class="line" style="background:${COLORS.base0.line}"></span>base0 ●</span>
       <span class="legend-item"><span class="line" style="background:${COLORS.base1.line}"></span>base1 ◆</span>
-      <span class="legend-item" style="color:#888">粗线+点 = 触发帧四通道值；细线 = 原始帧</span>
+      <span class="legend-item"><span class="line" style="background:rgba(16,160,90,.22);border:1px solid #5ecf8f;height:10px;border-radius:2px;"></span>AW 已佩戴</span>
+      <span class="legend-item"><span class="line" style="background:rgba(161,35,21,.14);border:1px solid #f5b5ac;height:10px;border-radius:2px;"></span>AW 未佩戴</span>
+      <span class="legend-item" style="color:#888">粗线+点 = 触发帧四通道值；细线 = 原始帧；色带 = AW wear state 持有区</span>
     `;
     wrap.appendChild(legend);
 
@@ -522,6 +569,30 @@
       for (const [k, v] of tsMap) if (Math.abs(k - x) < 0.5) return v;
       return null;
     }
+
+    const wearBgPlugin = {
+      id: 'awWearBg',
+      beforeDraw(chart) {
+        if (!wearBands.length) return;
+        const { ctx, chartArea, scales } = chart;
+        if (!chartArea || !scales.x) return;
+        const y0 = chartArea.top;
+        const y1 = chartArea.bottom;
+        ctx.save();
+        for (const b of wearBands) {
+          const px0 = scales.x.getPixelForValue(b.x0);
+          const px1 = scales.x.getPixelForValue(b.x1);
+          const left = Math.max(chartArea.left, Math.min(px0, px1));
+          const right = Math.min(chartArea.right, Math.max(px0, px1));
+          if (right <= left) continue;
+          ctx.fillStyle = b.state === 1
+            ? 'rgba(16, 160, 90, 0.16)'   // 偏翠绿，避免低透明度下发黄
+            : 'rgba(161, 35, 21, 0.12)';
+          ctx.fillRect(left, y0, right - left, y1 - y0);
+        }
+        ctx.restore();
+      }
+    };
 
     const cfg = {
       type: 'line',
@@ -590,11 +661,11 @@
     };
 
     if (chartInstance) chartInstance.destroy();
-    chartInstance = new Chart(canvas, cfg);
+    chartInstance = new Chart(canvas, { ...cfg, plugins: [wearBgPlugin] });
   }
 
   // ===================== 统计面板 =====================
-  function renderStats(rows) {
+  function renderStats(rows, wearEvents) {
     const grid = document.getElementById('statsGrid');
     grid.innerHTML = '';
     const keys = [
@@ -640,8 +711,9 @@
     const span = (t1 - t0) / 1000;
     const avgGap = rows.length > 1 ? (t1 - t0) / (rows.length - 1) / 1000 : 0;
     const trigCount = rows.filter(r => r.mask !== 0).length;
+    const wearN = (wearEvents || []).length;
     document.getElementById('countHint').textContent =
-      `共 ${rows.length} 帧 · 触发 ${trigCount} 笔 · 时间跨度 ${span.toFixed(1)} s · 平均间隔 ${avgGap.toFixed(2)} s`;
+      `共 ${rows.length} 帧 · 触发 ${trigCount} 笔 · AW 佩戴事件 ${wearN} 次 · 时间跨度 ${span.toFixed(1)} s · 平均间隔 ${avgGap.toFixed(2)} s`;
   }
 
   // ===================== 右键菜单 =====================
@@ -696,7 +768,7 @@
   function generateFromText(text) {
     showError('');
     if (!text || !text.trim()) { showError('请先粘贴日志数据或拖拽文件。'); return; }
-    const rows = parseLog(text);
+    const { rows, wearEvents } = parseLog(text);
     if (!rows.length) {
       showError('未解析到 app_wear 行。请确认格式为：[YYYY-MM-DD HH:MM:SS.mmm] <lvl> app_wear: diff[a b] base[c d] mask[XXh]');
       document.getElementById('statsPanel').style.display = 'none';
@@ -704,13 +776,14 @@
       document.getElementById('chartsArea').innerHTML = '';
       return;
     }
-    renderStats(rows);
-    renderChart(rows);
+    renderStats(rows, wearEvents);
+    renderChart(rows, wearEvents);
   }
 
   function fillSample() {
     logInput.value = `[2026-10-29 17:36:30.921] <wrn> app_wear: diff[-36098 -11781] base[35704 8531] mask[0Fh]
 [2026-10-29 17:36:31.921] <wrn> app_wear: diff[-19605 -6927] base[19095 4058] mask[0Dh]
+[2026-10-29 17:36:32.100] <wrn> app_wear: [aw] wear state:1
 [2026-10-29 17:36:32.921] <wrn> app_wear: diff[272635 54333] base[11622 3314] mask[07h]
 [2026-10-29 17:36:33.921] <wrn> app_wear: diff[674140 120058] base[11622 19125] mask[0Bh]
 [2026-10-29 17:36:34.921] <wrn> app_wear: diff[692113 104554] base[11622 36611] mask[0Bh]
@@ -720,8 +793,10 @@
 [2026-10-29 17:36:38.921] <wrn> app_wear: diff[709783 58698] base[11622 84751] mask[0Ah]
 [2026-10-29 17:36:39.921] <wrn> app_wear: diff[708198 47491] base[11622 93198] mask[0Ah]
 [2026-10-29 17:36:40.921] <wrn> app_wear: diff[700857 44451] base[11622 99690] mask[08h]
+[2026-10-29 17:36:41.200] <wrn> app_wear: [aw] wear state:0
 [2026-10-29 17:36:41.925] <wrn> app_wear: diff[527554 49857] base[11622 93405] mask[09h]
 [2026-10-29 17:36:42.976] <wrn> app_wear: diff[651115 46689] base[11622 92696] mask[01h]
+[2026-10-29 17:36:43.100] <wrn> app_wear: [aw] wear state:1
 [2026-10-29 17:36:43.921] <wrn> app_wear: diff[581407 33521] base[11622 99179] mask[0Bh]
 [2026-10-29 17:36:44.921] <wrn> app_wear: diff[626924 37190] base[11622 104582] mask[09h]
 [2026-10-29 17:36:45.921] <wrn> app_wear: diff[658515 31545] base[11622 109551] mask[09h]
@@ -820,12 +895,12 @@
     if (chartInstance) chartInstance.resetZoom();
   });
 
-  ['chkRaw','chkTrace','chkLine'].forEach(id => {
+  ['chkRaw','chkTrace','chkLine','chkWearBg'].forEach(id => {
     document.getElementById(id).addEventListener('change', () => {
       const text = logInput.value;
       if (!text.trim()) return;
-      const rows = parseLog(text);
-      if (rows.length) renderChart(rows);
+      const { rows, wearEvents } = parseLog(text);
+      if (rows.length) renderChart(rows, wearEvents);
     });
   });
 
