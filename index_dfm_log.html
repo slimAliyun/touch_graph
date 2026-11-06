@@ -207,8 +207,9 @@
 
   <h1>DFM Touch 波形分析工具</h1>
   <div class="subtitle">
-    支持 <b>串口纯文本</b> 与 <b>BLE 日志（带时间戳/Notify）</b> 两种格式；自动识别 4 字段（diff0, diff1, base0, base1）与 8 字段（追加 valid0, valid1, raw0, raw1）行。
-    可直接 <b>拖拽日志文件</b> 到下方区域，或粘贴文本。四条曲线绘制在同一坐标系。
+    支持 <b>串口纯文本</b> 与 <b>BLE 日志（带时间戳/Notify）</b>。
+    4 字段为 <code>TP diff0,diff1,base0,base1</code>，8 字段再追加 <code>valid0,valid1,raw0,raw1</code>。
+    可直接 <b>拖拽日志文件</b> 到下方区域，或粘贴文本。曲线绘制在同一坐标系，valid/raw 线宽为 diff/base 的一半。
   </div>
 
   <!-- 拖拽 + 输入区 -->
@@ -224,8 +225,8 @@
     <textarea id="logInput" placeholder="粘贴串口或 BLE 日志，例如：
 
 $DFM,TP 526260,236,-44,121699*70
-（BLE 格式）14:19:12.690> [6e400003] Notify: &quot;$DFM,TP 77,158,-804,-3473*68&quot;
-也支持裸 TP 行：TP 526260,236,-44,121699"></textarea>
+$DFM,TP 526260,236,-44,121699,1000,2000,526260,236*70
+（BLE）14:19:12.690> [6e400003] Notify: &quot;$DFM,TP 77,158,-804,-3473,10,20,30,40*68&quot;"></textarea>
 
     <div class="btn-row">
       <button class="primary" id="btnGenerate">生成波形图</button>
@@ -258,7 +259,7 @@ $DFM,TP 526260,236,-44,121699*70
     <b>diff1</b>：参考 pad 的检测数据（差分）；
     <b>base0</b>：检测 pad 的 baseline；
     <b>base1</b>：参考 pad 的 baseline。
-    8 字段格式会额外解析 valid/raw 但默认不绘图。
+    8 字段再画 <b>valid0/valid1</b>、<b>raw0/raw1</b>，线宽分别为 diff、base 的一半。日志中的数已是右移 10 位后的值。
   </div>
 
 </div>
@@ -384,11 +385,16 @@ $DFM,TP 526260,236,-44,121699*70
 
   // ===================== 图表 =====================
   let chartInstance = null;
+  let chartExt = false;
   const COLORS = {
     diff0: { line: '#2563eb', fill: 'rgba(37,99,235,.05)' },
     diff1: { line: '#f59e0b', fill: 'rgba(245,158,11,.05)' },
     base0: { line: '#10b981', fill: 'rgba(16,185,129,.06)' },
-    base1: { line: '#ef4444', fill: 'rgba(239,68,68,.06)' }
+    base1: { line: '#ef4444', fill: 'rgba(239,68,68,.06)' },
+    valid0: { line: '#7c3aed', fill: 'rgba(124,58,237,.05)' },
+    valid1: { line: '#db2777', fill: 'rgba(219,39,119,.05)' },
+    raw0: { line: '#0891b2', fill: 'rgba(8,145,178,.05)' },
+    raw1: { line: '#64748b', fill: 'rgba(100,116,139,.05)' }
   };
 
   function renderCombinedChart(rows) {
@@ -399,59 +405,67 @@ $DFM,TP 526260,236,-44,121699*70
     const maxPoints = 3000;
     const indices = rows.map((_, i) => i);
 
-    const d0 = downsample(indices, rows.map(r => r.diff0), maxPoints);
-    const d1 = downsample(indices, rows.map(r => r.diff1), maxPoints);
-    const b0 = downsample(indices, rows.map(r => r.base0), maxPoints);
-    const b1 = downsample(indices, rows.map(r => r.base1), maxPoints);
+    const sampled = downsample(indices, indices, maxPoints);
+    const labels = sampled.labels;
+    const ext = rows.some(r => r.format === 8);
+    chartExt = ext;
 
-    const labels = d0.labels;
+    function series(key) {
+      return labels.map(i => {
+        const v = rows[i][key];
+        return typeof v === 'number' && Number.isFinite(v) ? v : null;
+      });
+    }
 
-    const datasets = [
-      {
-        label: 'diff0 (检测pad)',
-        data: d0.data,
-        borderColor: COLORS.diff0.line,
-        backgroundColor: COLORS.diff0.fill,
-        borderWidth: 1.5, pointRadius: 0, pointHitRadius: 6, tension: 0, fill: false
-      },
-      {
-        label: 'diff1 (参考pad)',
-        data: d1.data,
-        borderColor: COLORS.diff1.line,
-        backgroundColor: COLORS.diff1.fill,
-        borderWidth: 1.5, pointRadius: 0, pointHitRadius: 6, tension: 0, fill: false
-      },
-      {
-        label: 'base0 (检测pad基线)',
-        data: b0.data,
-        borderColor: COLORS.base0.line,
-        backgroundColor: COLORS.base0.fill,
-        borderWidth: 1.6, pointRadius: 0, pointHitRadius: 6, tension: 0, fill: false
-      },
-      {
-        label: 'base1 (参考pad基线)',
-        data: b1.data,
-        borderColor: COLORS.base1.line,
-        backgroundColor: COLORS.base1.fill,
-        borderWidth: 1.6, pointRadius: 0, pointHitRadius: 6, tension: 0, fill: false
-      }
+    const channels = [
+      { key: 'diff0', label: 'diff0 (检测pad)', width: 1.5 },
+      { key: 'diff1', label: 'diff1 (参考pad)', width: 1.5 },
+      { key: 'base0', label: 'base0 (检测pad基线)', width: 1.6 },
+      { key: 'base1', label: 'base1 (参考pad基线)', width: 1.6 }
     ];
+    if (ext) {
+      channels.push(
+        { key: 'valid0', label: 'valid0', width: 0.75 },
+        { key: 'valid1', label: 'valid1', width: 0.75 },
+        { key: 'raw0', label: 'raw0', width: 0.8 },
+        { key: 'raw1', label: 'raw1', width: 0.8 }
+      );
+    }
+
+    const datasets = channels.map(ch => ({
+      label: ch.label,
+      data: series(ch.key),
+      borderColor: COLORS[ch.key].line,
+      backgroundColor: COLORS[ch.key].fill,
+      borderWidth: ch.width,
+      pointRadius: 0,
+      pointHitRadius: 6,
+      tension: 0,
+      fill: false,
+      spanGaps: false
+    }));
 
     const wrap = document.createElement('div');
     wrap.className = 'chart-wrap';
     const title = document.createElement('div');
     title.className = 'chart-title';
-    title.innerHTML = `<span>diff0 / diff1 / base0 / base1 四合一波形</span>
+    title.innerHTML = `<span>${ext ? 'diff/base + valid/raw' : 'diff0 / diff1 / base0 / base1 四合一'}波形</span>
       <span class="hint">横轴：sample index（共 ${n} 条，绘制 ${labels.length} 点）</span>`;
     wrap.appendChild(title);
 
     const legend = document.createElement('div');
     legend.className = 'legend-row';
+    const extLegend = ext ? `
+      <span class="legend-item"><span class="line" style="background:${COLORS.valid0.line};height:1px"></span>valid0</span>
+      <span class="legend-item"><span class="line" style="background:${COLORS.valid1.line};height:1px"></span>valid1</span>
+      <span class="legend-item"><span class="line" style="background:${COLORS.raw0.line};height:1px"></span>raw0</span>
+      <span class="legend-item"><span class="line" style="background:${COLORS.raw1.line};height:1px"></span>raw1</span>` : '';
     legend.innerHTML = `
       <span class="legend-item"><span class="line" style="background:${COLORS.diff0.line}"></span>diff0 (检测pad)</span>
       <span class="legend-item"><span class="line" style="background:${COLORS.diff1.line}"></span>diff1 (参考pad)</span>
       <span class="legend-item"><span class="line" style="background:${COLORS.base0.line}"></span>base0 (检测pad基线)</span>
       <span class="legend-item"><span class="line" style="background:${COLORS.base1.line}"></span>base1 (参考pad基线)</span>
+      ${extLegend}
     `;
     wrap.appendChild(legend);
 
@@ -486,7 +500,7 @@ $DFM,TP 526260,236,-44,121699*70
           },
           y: {
             position: 'left',
-            title: { display: true, text: 'diff0 / diff1 / base0 / base1', color: '#888', font: { size: 11 } },
+            title: { display: true, text: ext ? 'diff / base / valid / raw' : 'diff0 / diff1 / base0 / base1', color: '#888', font: { size: 11 } },
             ticks: { color: '#888', font: { size: 11 } },
             grid: { color: 'rgba(0,0,0,.05)' }
           }
@@ -575,8 +589,8 @@ $DFM,TP 526260,236,-44,121699*70
       cards.push({
         cls: 'info',
         ttl: '检测到 8 字段格式',
-        html: `本次日志包含 valid0/valid1/raw0/raw1，已解析但本页默认只绘制 diff0/diff1/base0/base1 四条核心曲线。
-        如需查看 raw/valid，可在此基础上扩展。`
+        html: `本次日志包含 valid0/valid1/raw0/raw1，已与 diff/base 画在同一坐标系。
+        valid 线宽 0.75（diff 的一半），raw 线宽 0.8（base 的一半）。数值按日志原值绘制，不再右移。`
       });
     }
 
@@ -648,6 +662,31 @@ $DFM,TP 526260,236,-44,121699*70
       }
       grid.appendChild(card);
     }
+    if (rows.some(r => r.format === 8)) {
+      const extKeys = [
+        { k: 'valid0', name: 'valid0' },
+        { k: 'valid1', name: 'valid1' },
+        { k: 'raw0', name: 'raw0' },
+        { k: 'raw1', name: 'raw1' }
+      ];
+      for (const { k, name } of extKeys) {
+        const st = calcStats(rows, k);
+        const card = document.createElement('div');
+        card.className = 'stat-card';
+        if (st) {
+          card.innerHTML = `
+            <div class="name">${name}</div>
+            <div class="row"><span>min</span><b>${st.min}</b></div>
+            <div class="row"><span>max</span><b>${st.max}</b></div>
+            <div class="row"><span>range</span><b>${st.range}</b></div>
+            <div class="row"><span>avg</span><b>${st.avg.toFixed(1)}</b></div>
+          `;
+        } else {
+          card.innerHTML = `<div class="name">${name}</div><div class="row"><span>无数据</span></div>`;
+        }
+        grid.appendChild(card);
+      }
+    }
 
     document.getElementById('statsPanel').style.display = '';
     const f4 = formatInfo.format4Count, f8 = formatInfo.format8Count;
@@ -690,6 +729,7 @@ $DFM,TP 526260,236,-44,121699*70
       if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
       document.getElementById('chartsArea').innerHTML = '';
       document.getElementById('insightArea').innerHTML = '';
+      chartExt = false;
       return false;
     }
 
@@ -751,6 +791,7 @@ $DFM,TP 525099,202,-44,121605,1040,2040,525099,202*75`;
     if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
     document.getElementById('chartsArea').innerHTML = '';
     document.getElementById('insightArea').innerHTML = '';
+    chartExt = false;
   }
 
   function exportPNG() {
@@ -767,7 +808,9 @@ $DFM,TP 525099,202,-44,121605,1040,2040,525099,202*75`;
 
     ctx.fillStyle = '#222';
     ctx.font = '600 18px "PingFang SC", "Microsoft YaHei", sans-serif';
-    ctx.fillText('DFM Touch — diff0 / diff1 / base0 / base1 四合一波形', pad, 34);
+    ctx.fillText(chartExt
+      ? 'DFM Touch — diff/base + valid/raw'
+      : 'DFM Touch — diff0 / diff1 / base0 / base1 四合一波形', pad, 34);
 
     ctx.fillStyle = '#666';
     ctx.font = '12px "PingFang SC", "Microsoft YaHei", sans-serif';

@@ -239,7 +239,8 @@
 
   <h1>DFM Touch 波形分析 · mask 触发四通道轨迹</h1>
   <div class="subtitle">
-    解析 <code>app_wear: diff[a b] base[c d] mask[XXh]</code> 帧，以及 AW 回调
+    解析 <code>app_wear: diff[a b] base[c d] mask[XXh]</code>，
+    或 <code>diff[a b] base[c d] val[e f] raw[g h] mask[XXh]</code>，以及 AW 回调
     <code>[aw] wear state:0/1</code>（匹配到 <code>wear state:0|1</code> 即可）。
     X 轴为日志中的 <code>hh:mm:ss</code>。浅色细线为原始数据，粗线 + 标记点为 <b>mask 触发帧的四通道值</b>；
     淡绿/淡红背景为 AW 佩戴态持有区间。支持 <b>滚轮缩放 · 拖拽平移 · 右键菜单恢复 · 按钮恢复</b>。
@@ -254,9 +255,9 @@
       <span class="icon">📂</span>
       <span>将文件拖拽到此面板任意位置，或点击下方按钮选择文件</span>
     </div>
-    <textarea id="logInput" placeholder="粘贴 app_wear 日志，例如：
+    <textarea id="logInput" placeholder="粘贴 app_wear 日志。旧格式或新格式整份使用一种，例如：
 [2026-10-29 17:36:30.921] <wrn> app_wear: diff[-36098 -11781] base[35704 8531] mask[0Fh]
-[2026-10-29 17:36:31.921] <wrn> app_wear: diff[-19605 -6927] base[19095 4058] mask[0Dh]"></textarea>
+[2026-10-29 17:36:31.921] <wrn> app_wear: diff[-19605 -6927] base[19095 4058] val[12 34] raw[56 78] mask[0Dh]"></textarea>
 
     <div class="btn-row">
       <button class="primary" id="btnGenerate">生成波形图</button>
@@ -297,6 +298,7 @@
       <li>某通道在某触发帧的值为"伴随值"（该帧不一定是该通道触发），四通道是否触发以 <b>mask 分布</b> 和统计卡片为准；</li>
       <li>鼠标悬停任意触发点，tooltip 显示该帧绝对时间、四通道值与 mask；</li>
       <li>mask 分布按 <b>bit</b> 统计：组合帧（如 0Fh）会同时计入 01h/02h/04h/08h 四个位，故各项之和 ≥ 总帧数。</li>
+      <li>新格式多 <code>val</code>、<code>raw</code> 两组，画成 valid0/1、raw0/1，线宽是 diff/base 的一半。日志里的数已是右移 10 位后的值。一份日志只含一种格式；若两种行都有，只收下能完整对上格式的行。</li>
     </ul>
   </div>
 
@@ -326,7 +328,12 @@
   // ===================== 解析 =====================
   const RE_TS = /^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]/;
   const RE_WEAR = /^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]\s*<\w+>\s*app_wear:\s*diff\[\s*(-?\d+)\s+(-?\d+)\s*\]\s*base\[\s*(-?\d+)\s+(-?\d+)\s*\]\s*mask\[([0-9A-Fa-f]+)h\]/;
+  const RE_WEAR_EXT = /^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]\s*<\w+>\s*app_wear:\s*diff\[\s*(-?\d+)\s+(-?\d+)\s*\]\s*base\[\s*(-?\d+)\s+(-?\d+)\s*\]\s*val\[\s*(-?\d+)\s+(-?\d+)\s*\]\s*raw\[\s*(-?\d+)\s+(-?\d+)\s*\]\s*mask\[([0-9A-Fa-f]+)h\]/;
   const RE_AW_STATE = /wear state:([01])\b/;
+
+  function hasExtRows(rows) {
+    return rows.some(r => Number.isFinite(r.valid0));
+  }
 
   function parseLog(text) {
     const rows = [];
@@ -335,6 +342,23 @@
     for (const line of lines) {
       const s = line.trim();
       if (!s) continue;
+
+      const mExt = s.match(RE_WEAR_EXT);
+      if (mExt) {
+        const ts = new Date(mExt[1].replace(' ', 'T')).getTime();
+        if (Number.isFinite(ts)) {
+          rows.push({
+            tsStr: mExt[1],
+            ts,
+            diff0: +mExt[2], diff1: +mExt[3],
+            base0: +mExt[4], base1: +mExt[5],
+            valid0: +mExt[6], valid1: +mExt[7],
+            raw0: +mExt[8], raw1: +mExt[9],
+            mask: parseInt(mExt[10], 16)
+          });
+        }
+        continue;
+      }
 
       const mFrame = s.match(RE_WEAR);
       if (mFrame) {
@@ -442,24 +466,48 @@
 
   // ===================== 图表 =====================
   let chartInstance = null;
+  let chartExt = false;
 
   const COLORS = {
     diff0: { line: '#2563eb', raw: 'rgba(37,99,235,.45)' },
     diff1: { line: '#f59e0b', raw: 'rgba(245,158,11,.45)' },
     base0: { line: '#10b981', raw: 'rgba(16,185,129,.45)' },
-    base1: { line: '#ef4444', raw: 'rgba(239,68,68,.45)' }
+    base1: { line: '#ef4444', raw: 'rgba(239,68,68,.45)' },
+    valid0: { line: '#7c3aed', raw: 'rgba(124,58,237,.45)' },
+    valid1: { line: '#db2777', raw: 'rgba(219,39,119,.45)' },
+    raw0: { line: '#0891b2', raw: 'rgba(8,145,178,.45)' },
+    raw1: { line: '#64748b', raw: 'rgba(100,116,139,.45)' }
   };
   const POINT_STYLES = {
     diff0: 'triangle',
     diff1: 'rect',
     base0: 'circle',
-    base1: 'rectRot'
+    base1: 'rectRot',
+    valid0: 'star',
+    valid1: 'cross',
+    raw0: 'dash',
+    raw1: 'line'
   };
+  const CHANNELS = [
+    { key: 'diff0', rawWidth: 1, trigWidth: 1.6 },
+    { key: 'diff1', rawWidth: 1, trigWidth: 1.6 },
+    { key: 'base0', rawWidth: 1, trigWidth: 1.6 },
+    { key: 'base1', rawWidth: 1, trigWidth: 1.6 },
+    { key: 'valid0', rawWidth: 0.5, trigWidth: 0.8, ext: true },
+    { key: 'valid1', rawWidth: 0.5, trigWidth: 0.8, ext: true },
+    { key: 'raw0', rawWidth: 0.5, trigWidth: 0.8, ext: true },
+    { key: 'raw1', rawWidth: 0.5, trigWidth: 0.8, ext: true }
+  ];
+
+  function yOf(row, key) {
+    const v = row[key];
+    return Number.isFinite(v) ? v : null;
+  }
 
   function buildTriggerSeries(rows, key, ts0) {
     const out = [];
     for (const r of rows) {
-      if (r.mask !== 0) out.push({ x: r.ts - ts0, y: r[key] });
+      if (r.mask !== 0) out.push({ x: r.ts - ts0, y: yOf(r, key) });
     }
     return out;
   }
@@ -476,53 +524,51 @@
     const showTrace = document.getElementById('chkTrace').checked;
     const showLine = document.getElementById('chkLine').checked;
     const showWearBg = document.getElementById('chkWearBg').checked;
+    const ext = hasExtRows(rows);
+    chartExt = ext;
+    const channels = CHANNELS.filter(ch => !ch.ext || ext);
     const xMin = 0;
     const xMax = rows[rows.length - 1].ts - ts0;
     const wearBands = showWearBg ? buildWearBands(wearEvents, xMin, xMax, ts0) : [];
 
-    const rawData = {
-      diff0: rows.map(r => ({ x: r.ts - ts0, y: r.diff0 })),
-      diff1: rows.map(r => ({ x: r.ts - ts0, y: r.diff1 })),
-      base0: rows.map(r => ({ x: r.ts - ts0, y: r.base0 })),
-      base1: rows.map(r => ({ x: r.ts - ts0, y: r.base1 }))
-    };
-
     const datasets = [];
 
     if (showRaw) {
-      for (const key of ['diff0', 'diff1', 'base0', 'base1']) {
+      for (const ch of channels) {
         datasets.push({
-          label: `${key} 原始`,
-          data: rawData[key],
-          borderColor: COLORS[key].raw,
+          label: `${ch.key} 原始`,
+          data: rows.map(r => ({ x: r.ts - ts0, y: yOf(r, ch.key) })),
+          borderColor: COLORS[ch.key].raw,
           backgroundColor: 'transparent',
-          borderWidth: 1,
+          borderWidth: ch.rawWidth,
           pointRadius: 0,
           pointHitRadius: 0,
           tension: 0,
           fill: false,
           showLine: true,
+          spanGaps: false,
           order: 10
         });
       }
     }
 
     if (showTrace) {
-      for (const key of ['diff0', 'diff1', 'base0', 'base1']) {
+      for (const ch of channels) {
         datasets.push({
-          label: `${key} 触发帧值`,
-          data: buildTriggerSeries(rows, key, ts0),
-          borderColor: COLORS[key].line,
-          backgroundColor: COLORS[key].line,
-          borderWidth: 1.6,
+          label: `${ch.key} 触发帧值`,
+          data: buildTriggerSeries(rows, ch.key, ts0),
+          borderColor: COLORS[ch.key].line,
+          backgroundColor: COLORS[ch.key].line,
+          borderWidth: ch.trigWidth,
           pointRadius: 3,
           pointHoverRadius: 6,
-          pointStyle: POINT_STYLES[key],
+          pointStyle: POINT_STYLES[ch.key],
           pointBorderColor: '#fff',
           pointBorderWidth: 1,
           tension: 0,
           fill: false,
           showLine: showLine,
+          spanGaps: false,
           order: 1
         });
       }
@@ -533,20 +579,26 @@
     const title = document.createElement('div');
     title.className = 'chart-title';
     const trigCount = rows.filter(r => r.mask !== 0).length;
-    title.innerHTML = `<span>四通道原始波形 + mask 触发帧四通道值</span>
+    title.innerHTML = `<span>${ext ? 'diff/base + valid/raw' : '四通道'}原始波形 + mask 触发帧</span>
       <span class="hint">共 ${rows.length} 帧，触发帧 ${trigCount} 笔 · AW 佩戴事件 ${wearEvents.length} 次 · X 轴 hh:mm:ss · 滚轮缩放 / 拖拽平移 / 右键菜单</span>`;
     wrap.appendChild(title);
 
     const legend = document.createElement('div');
     legend.className = 'legend-row';
+    const extLegend = ext ? `
+      <span class="legend-item"><span class="line" style="background:${COLORS.valid0.line};height:1px"></span>valid0 ★</span>
+      <span class="legend-item"><span class="line" style="background:${COLORS.valid1.line};height:1px"></span>valid1 ✚</span>
+      <span class="legend-item"><span class="line" style="background:${COLORS.raw0.line};height:1px"></span>raw0</span>
+      <span class="legend-item"><span class="line" style="background:${COLORS.raw1.line};height:1px"></span>raw1</span>` : '';
     legend.innerHTML = `
       <span class="legend-item"><span class="line" style="background:${COLORS.diff0.line}"></span>diff0 ▲</span>
       <span class="legend-item"><span class="line" style="background:${COLORS.diff1.line}"></span>diff1 ■</span>
       <span class="legend-item"><span class="line" style="background:${COLORS.base0.line}"></span>base0 ●</span>
       <span class="legend-item"><span class="line" style="background:${COLORS.base1.line}"></span>base1 ◆</span>
+      ${extLegend}
       <span class="legend-item"><span class="line" style="background:rgba(16,160,90,.22);border:1px solid #5ecf8f;height:10px;border-radius:2px;"></span>AW 已佩戴</span>
       <span class="legend-item"><span class="line" style="background:rgba(161,35,21,.14);border:1px solid #f5b5ac;height:10px;border-radius:2px;"></span>AW 未佩戴</span>
-      <span class="legend-item" style="color:#888">粗线+点 = 触发帧四通道值；细线 = 原始帧；色带 = AW wear state 持有区</span>
+      <span class="legend-item" style="color:#888">粗线+点 = 触发帧；细线 = 全部帧${ext ? '；valid/raw 线宽为 diff/base 的一半' : ''}；色带 = AW wear state 持有区</span>
     `;
     wrap.appendChild(legend);
 
@@ -614,7 +666,11 @@
               label: (item) => {
                 const r = findRow(item.parsed.x);
                 if (!r) return `${item.dataset.label}: ${item.parsed.y}`;
-                return `diff[${r.diff0} ${r.diff1}] base[${r.base0} ${r.base1}]`;
+                let text = `diff[${r.diff0} ${r.diff1}] base[${r.base0} ${r.base1}]`;
+                if (Number.isFinite(r.valid0)) {
+                  text += ` val[${r.valid0} ${r.valid1}] raw[${r.raw0} ${r.raw1}]`;
+                }
+                return text;
               }
             }
           },
@@ -691,6 +747,31 @@
         card.innerHTML = `<div class="name">${name}</div><div class="row"><span>无数据</span></div>`;
       }
       grid.appendChild(card);
+    }
+    if (hasExtRows(rows)) {
+      const extKeys = [
+        { k: 'valid0', name: 'valid0', color: COLORS.valid0.line },
+        { k: 'valid1', name: 'valid1', color: COLORS.valid1.line },
+        { k: 'raw0', name: 'raw0', color: COLORS.raw0.line },
+        { k: 'raw1', name: 'raw1', color: COLORS.raw1.line }
+      ];
+      for (const { k, name, color } of extKeys) {
+        const st = calcStats(rows, k);
+        const card = document.createElement('div');
+        card.className = 'stat-card';
+        if (st) {
+          card.innerHTML = `
+            <div class="name"><span class="dot" style="background:${color}"></span>${name}</div>
+            <div class="row"><span>min / max</span><b>${st.min} / ${st.max}</b></div>
+            <div class="row"><span>range</span><b>${st.range}</b></div>
+            <div class="row"><span>avg</span><b>${st.avg.toFixed(1)}</b></div>
+            <div class="row"><span>样本数</span><b>${st.n}</b></div>
+          `;
+        } else {
+          card.innerHTML = `<div class="name">${name}</div><div class="row"><span>无数据</span></div>`;
+        }
+        grid.appendChild(card);
+      }
     }
 
     const hist = maskHistogram(rows);
@@ -770,9 +851,10 @@
     if (!text || !text.trim()) { showError('请先粘贴日志数据或拖拽文件。'); return; }
     const { rows, wearEvents } = parseLog(text);
     if (!rows.length) {
-      showError('未解析到 app_wear 行。请确认格式为：[YYYY-MM-DD HH:MM:SS.mmm] <lvl> app_wear: diff[a b] base[c d] mask[XXh]');
+      showError('未解析到 app_wear 行。旧格式：diff[a b] base[c d] mask[XXh]；新格式：diff[a b] base[c d] val[e f] raw[g h] mask[XXh]');
       document.getElementById('statsPanel').style.display = 'none';
       if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+      chartExt = false;
       document.getElementById('chartsArea').innerHTML = '';
       return;
     }
@@ -816,6 +898,7 @@
     dropHint.innerHTML = `<span class="icon">📂</span><span>将文件拖拽到此面板任意位置，或点击下方按钮选择文件</span>`;
     document.getElementById('statsPanel').style.display = 'none';
     if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+    chartExt = false;
     document.getElementById('chartsArea').innerHTML = '';
   }
 
@@ -830,7 +913,9 @@
     ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, out.width, out.height);
     ctx.fillStyle = '#222';
     ctx.font = '600 18px "PingFang SC","Microsoft YaHei",sans-serif';
-    ctx.fillText('DFM Touch — 四通道原始波形 + mask 触发帧四通道值', pad, 34);
+    ctx.fillText(chartExt
+      ? 'DFM Touch — diff/base + valid/raw + mask 触发帧'
+      : 'DFM Touch — 四通道原始波形 + mask 触发帧四通道值', pad, 34);
     ctx.fillStyle = '#666';
     ctx.font = '12px "PingFang SC","Microsoft YaHei",sans-serif';
     ctx.fillText(`生成时间: ${new Date().toLocaleString()}`, pad, 52);
